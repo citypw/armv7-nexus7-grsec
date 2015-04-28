@@ -21846,6 +21846,31 @@ index f5dfe0c..166e979 100644
  			break;
  		}
  
+diff --git a/mm/Kconfig b/mm/Kconfig
+index 84489cd..985a3df 100644
+--- a/mm/Kconfig
++++ b/mm/Kconfig
+@@ -249,8 +249,9 @@ config KSM
+ config DEFAULT_MMAP_MIN_ADDR
+         int "Low address space to protect from user allocation"
+ 	depends on MMU
+-        default 4096
+-        help
++	default 32768 if ALPHA || ARM || PARISC || SPARC32
++	default 65536
++	help
+ 	  This is the portion of low virtual memory which should be protected
+ 	  from userspace allocation.  Keeping a user from writing to low pages
+ 	  can help reduce the impact of kernel NULL pointer bugs.
+@@ -280,7 +281,7 @@ config MEMORY_FAILURE
+ 
+ config HWPOISON_INJECT
+ 	tristate "HWPoison pages injector"
+-	depends on MEMORY_FAILURE && DEBUG_KERNEL && PROC_FS
++	depends on MEMORY_FAILURE && DEBUG_KERNEL && PROC_FS && !GRKERNSEC
+ 	select PROC_PAGE_MONITOR
+ 
+ config NOMMU_INITIAL_TRIM_EXCESS
 diff --git a/mm/backing-dev.c b/mm/backing-dev.c
 index fc15fb1..af1a9b7 100644
 --- a/mm/backing-dev.c
@@ -22275,6 +22300,808 @@ index b075d1d..a3c1d11 100644
  	error = 0;
  	if (end == start)
  		goto out;
+diff --git a/mm/memory-failure.c b/mm/memory-failure.c
+index c99ad4e..33187bb 100644
+--- a/mm/memory-failure.c
++++ b/mm/memory-failure.c
+@@ -61,7 +61,7 @@ int sysctl_memory_failure_early_kill __read_mostly = 0;
+ 
+ int sysctl_memory_failure_recovery __read_mostly = 1;
+ 
+-atomic_long_t mce_bad_pages __read_mostly = ATOMIC_LONG_INIT(0);
++atomic_long_unchecked_t mce_bad_pages __read_mostly = ATOMIC_LONG_INIT(0);
+ 
+ #if defined(CONFIG_HWPOISON_INJECT) || defined(CONFIG_HWPOISON_INJECT_MODULE)
+ 
+@@ -202,7 +202,7 @@ static int kill_proc(struct task_struct *t, unsigned long addr, int trapno,
+ 		pfn, t->comm, t->pid);
+ 	si.si_signo = SIGBUS;
+ 	si.si_errno = 0;
+-	si.si_addr = (void *)addr;
++	si.si_addr = (void __user *)addr;
+ #ifdef __ARCH_SI_TRAPNO
+ 	si.si_trapno = trapno;
+ #endif
+@@ -758,7 +758,7 @@ static struct page_state {
+ 	unsigned long res;
+ 	char *msg;
+ 	int (*action)(struct page *p, unsigned long pfn);
+-} error_states[] = {
++} __do_const  error_states[] = {
+ 	{ reserved,	reserved,	"reserved kernel",	me_kernel },
+ 	/*
+ 	 * free pages are specially detected outside this table:
+@@ -1036,7 +1036,7 @@ int memory_failure(unsigned long pfn, int trapno, int flags)
+ 	}
+ 
+ 	nr_pages = 1 << compound_trans_order(hpage);
+-	atomic_long_add(nr_pages, &mce_bad_pages);
++	atomic_long_add_unchecked(nr_pages, &mce_bad_pages);
+ 
+ 	/*
+ 	 * We need/can do nothing about count=0 pages.
+@@ -1066,7 +1066,7 @@ int memory_failure(unsigned long pfn, int trapno, int flags)
+ 			if (!PageHWPoison(hpage)
+ 			    || (hwpoison_filter(p) && TestClearPageHWPoison(p))
+ 			    || (p != hpage && TestSetPageHWPoison(hpage))) {
+-				atomic_long_sub(nr_pages, &mce_bad_pages);
++				atomic_long_sub_unchecked(nr_pages, &mce_bad_pages);
+ 				return 0;
+ 			}
+ 			set_page_hwpoison_huge_page(hpage);
+@@ -1124,7 +1124,7 @@ int memory_failure(unsigned long pfn, int trapno, int flags)
+ 	}
+ 	if (hwpoison_filter(p)) {
+ 		if (TestClearPageHWPoison(p))
+-			atomic_long_sub(nr_pages, &mce_bad_pages);
++			atomic_long_sub_unchecked(nr_pages, &mce_bad_pages);
+ 		unlock_page(hpage);
+ 		put_page(hpage);
+ 		return 0;
+@@ -1319,7 +1319,7 @@ int unpoison_memory(unsigned long pfn)
+ 			return 0;
+ 		}
+ 		if (TestClearPageHWPoison(p))
+-			atomic_long_sub(nr_pages, &mce_bad_pages);
++			atomic_long_sub_unchecked(nr_pages, &mce_bad_pages);
+ 		pr_info("MCE: Software-unpoisoned free page %#lx\n", pfn);
+ 		return 0;
+ 	}
+@@ -1333,7 +1333,7 @@ int unpoison_memory(unsigned long pfn)
+ 	 */
+ 	if (TestClearPageHWPoison(page)) {
+ 		pr_info("MCE: Software-unpoisoned page %#lx\n", pfn);
+-		atomic_long_sub(nr_pages, &mce_bad_pages);
++		atomic_long_sub_unchecked(nr_pages, &mce_bad_pages);
+ 		freeit = 1;
+ 		if (PageHuge(page))
+ 			clear_page_hwpoison_huge_page(page);
+@@ -1446,7 +1446,7 @@ static int soft_offline_huge_page(struct page *page, int flags)
+ 	}
+ done:
+ 	if (!PageHWPoison(hpage))
+-		atomic_long_add(1 << compound_trans_order(hpage), &mce_bad_pages);
++		atomic_long_add_unchecked(1 << compound_trans_order(hpage), &mce_bad_pages);
+ 	set_page_hwpoison_huge_page(hpage);
+ 	dequeue_hwpoisoned_huge_page(hpage);
+ 	/* keep elevated page count for bad page */
+@@ -1577,7 +1577,7 @@ int soft_offline_page(struct page *page, int flags)
+ 		return ret;
+ 
+ done:
+-	atomic_long_add(1, &mce_bad_pages);
++	atomic_long_add_unchecked(1, &mce_bad_pages);
+ 	SetPageHWPoison(page);
+ 	/* keep elevated page count for bad page */
+ 	return ret;
+diff --git a/mm/memory.c b/mm/memory.c
+index a240b04..5600199 100644
+--- a/mm/memory.c
++++ b/mm/memory.c
+@@ -435,8 +435,11 @@ static inline void free_pmd_range(struct mmu_gather *tlb, pud_t *pud,
+ 		return;
+ 
+ 	pmd = pmd_offset(pud, start);
++#if !defined(CONFIG_X86_32) || !defined(CONFIG_PAX_PER_CPU_PGD)
+ 	pud_clear(pud);
+ 	pmd_free_tlb(tlb, pmd, start);
++#endif
++
+ }
+ 
+ static inline void free_pud_range(struct mmu_gather *tlb, pgd_t *pgd,
+@@ -467,9 +470,12 @@ static inline void free_pud_range(struct mmu_gather *tlb, pgd_t *pgd,
+ 	if (end - 1 > ceiling - 1)
+ 		return;
+ 
++#if !defined(CONFIG_X86_64) || !defined(CONFIG_PAX_PER_CPU_PGD)
+ 	pud = pud_offset(pgd, start);
+ 	pgd_clear(pgd);
+ 	pud_free_tlb(tlb, pud, start);
++#endif
++
+ }
+ 
+ /*
+@@ -1598,11 +1604,6 @@ no_page_table:
+ 	return page;
+ }
+ 
+-static inline int stack_guard_page(struct vm_area_struct *vma, unsigned long addr)
+-{
+-	return stack_guard_page_start(vma, addr) ||
+-	       stack_guard_page_end(vma, addr+PAGE_SIZE);
+-}
+ 
+ /**
+  * __get_user_pages() - pin user pages in memory
+@@ -1676,10 +1677,10 @@ int __get_user_pages(struct task_struct *tsk, struct mm_struct *mm,
+ 			(VM_MAYREAD | VM_MAYWRITE) : (VM_READ | VM_WRITE);
+ 	i = 0;
+ 
+-	do {
++	while (nr_pages) {
+ 		struct vm_area_struct *vma;
+ 
+-		vma = find_extend_vma(mm, start);
++		vma = find_vma(mm, start);
+ 		if (!vma && in_gate_area(mm, start)) {
+ 			unsigned long pg = start & PAGE_MASK;
+ 			pgd_t *pgd;
+@@ -1727,7 +1728,7 @@ int __get_user_pages(struct task_struct *tsk, struct mm_struct *mm,
+ 			goto next_page;
+ 		}
+ 
+-		if (!vma ||
++		if (!vma || start < vma->vm_start ||
+ 		    (vma->vm_flags & (VM_IO | VM_PFNMAP)) ||
+ 		    !(vm_flags & vma->vm_flags))
+ 			return i ? : -EFAULT;
+@@ -1754,11 +1755,6 @@ int __get_user_pages(struct task_struct *tsk, struct mm_struct *mm,
+ 				int ret;
+ 				unsigned int fault_flags = 0;
+ 
+-				/* For mlock, just skip the stack guard page. */
+-				if (foll_flags & FOLL_MLOCK) {
+-					if (stack_guard_page(vma, start))
+-						goto next_page;
+-				}
+ 				if (foll_flags & FOLL_WRITE)
+ 					fault_flags |= FAULT_FLAG_WRITE;
+ 				if (nonblocking)
+@@ -1832,7 +1828,7 @@ next_page:
+ 			start += PAGE_SIZE;
+ 			nr_pages--;
+ 		} while (nr_pages && start < vma->vm_end);
+-	} while (nr_pages);
++	}
+ 	return i;
+ }
+ EXPORT_SYMBOL(__get_user_pages);
+@@ -2039,6 +2035,10 @@ static int insert_page(struct vm_area_struct *vma, unsigned long addr,
+ 	page_add_file_rmap(page);
+ 	set_pte_at(mm, addr, pte, mk_pte(page, prot));
+ 
++#ifdef CONFIG_PAX_SEGMEXEC
++       pax_mirror_file_pte(vma, addr, page, ptl);
++#endif
++
+ 	retval = 0;
+ 	pte_unmap_unlock(pte, ptl);
+ 	return retval;
+@@ -2073,10 +2073,22 @@ out:
+ int vm_insert_page(struct vm_area_struct *vma, unsigned long addr,
+ 			struct page *page)
+ {
++
++#ifdef CONFIG_PAX_SEGMEXEC
++       struct vm_area_struct *vma_m;
++#endif
++
+ 	if (addr < vma->vm_start || addr >= vma->vm_end)
+ 		return -EFAULT;
+ 	if (!page_count(page))
+ 		return -EINVAL;
++
++#ifdef CONFIG_PAX_SEGMEXEC
++       vma_m = pax_find_mirror_vma(vma);
++       if (vma_m)
++               vma_m->vm_flags |= VM_INSERTPAGE;
++#endif
++
+ 	vma->vm_flags |= VM_INSERTPAGE;
+ 	return insert_page(vma, addr, page, vma->vm_page_prot);
+ }
+@@ -2162,6 +2174,7 @@ int vm_insert_mixed(struct vm_area_struct *vma, unsigned long addr,
+ 			unsigned long pfn)
+ {
+ 	BUG_ON(!(vma->vm_flags & VM_MIXEDMAP));
++	BUG_ON(vma->vm_mirror);
+ 
+ 	if (addr < vma->vm_start || addr >= vma->vm_end)
+ 		return -EFAULT;
+@@ -2369,7 +2382,9 @@ static int apply_to_pmd_range(struct mm_struct *mm, pud_t *pud,
+ 
+ 	BUG_ON(pud_huge(*pud));
+ 
+-	pmd = pmd_alloc(mm, pud, addr);
++       pmd = (mm == &init_mm) ?
++               pmd_alloc_kernel(mm, pud, addr) :
++               pmd_alloc(mm, pud, addr);
+ 	if (!pmd)
+ 		return -ENOMEM;
+ 	do {
+@@ -2389,7 +2404,10 @@ static int apply_to_pud_range(struct mm_struct *mm, pgd_t *pgd,
+ 	unsigned long next;
+ 	int err;
+ 
+-	pud = pud_alloc(mm, pgd, addr);
++       pud = (mm == &init_mm) ?
++               pud_alloc_kernel(mm, pgd, addr) :
++               pud_alloc(mm, pgd, addr);
++
+ 	if (!pud)
+ 		return -ENOMEM;
+ 	do {
+@@ -2477,8 +2495,189 @@ static inline void cow_user_page(struct page *dst, struct page *src, unsigned lo
+ 		copy_user_highpage(dst, src, va, vma);
+ }
+ 
++#ifdef CONFIG_PAX_SEGMEXEC
++static void pax_unmap_mirror_pte(struct vm_area_struct *vma, unsigned long address, pmd_t *pmd)
++{
++	struct mm_struct *mm = vma->vm_mm;
++	spinlock_t *ptl;
++	pte_t *pte, entry;
++
++	pte = pte_offset_map_lock(mm, pmd, address, &ptl);
++	entry = *pte;
++	if (!pte_present(entry)) {
++		if (!pte_none(entry)) {
++			BUG_ON(pte_file(entry));
++			free_swap_and_cache(pte_to_swp_entry(entry));
++			pte_clear_not_present_full(mm, address, pte, 0);
++		}
++	} else {
++		struct page *page;
++
++		flush_cache_page(vma, address, pte_pfn(entry));
++		entry = ptep_clear_flush(vma, address, pte);
++		BUG_ON(pte_dirty(entry));
++		page = vm_normal_page(vma, address, entry);
++		if (page) {
++			update_hiwater_rss(mm);
++			if (PageAnon(page))
++				dec_mm_counter_fast(mm, MM_ANONPAGES);
++			else
++				dec_mm_counter_fast(mm, MM_FILEPAGES);
++			page_remove_rmap(page);
++			page_cache_release(page);
++		}
++	}
++	pte_unmap_unlock(pte, ptl);
++}
++
++/* PaX: if vma is mirrored, synchronize the mirror's PTE
++ *
++ * the ptl of the lower mapped page is held on entry and is not released on exit
++ * or inside to ensure atomic changes to the PTE states (swapout, mremap, munmap, etc)
++ */
++static void pax_mirror_anon_pte(struct vm_area_struct *vma, unsigned long address, struct page *page_m, spinlock_t *ptl)
++{
++	struct mm_struct *mm = vma->vm_mm;
++	unsigned long address_m;
++	spinlock_t *ptl_m;
++	struct vm_area_struct *vma_m;
++	pmd_t *pmd_m;
++	pte_t *pte_m, entry_m;
++
++	BUG_ON(!page_m || !PageAnon(page_m));
++
++	vma_m = pax_find_mirror_vma(vma);
++	if (!vma_m)
++		return;
++
++	BUG_ON(!PageLocked(page_m));
++	BUG_ON(address >= SEGMEXEC_TASK_SIZE);
++	address_m = address + SEGMEXEC_TASK_SIZE;
++	pmd_m = pmd_offset(pud_offset(pgd_offset(mm, address_m), address_m), address_m);
++	pte_m = pte_offset_map(pmd_m, address_m);
++	ptl_m = pte_lockptr(mm, pmd_m);
++	if (ptl != ptl_m) {
++		spin_lock_nested(ptl_m, SINGLE_DEPTH_NESTING);
++		if (!pte_none(*pte_m))
++			goto out;
++	}
++
++	entry_m = pfn_pte(page_to_pfn(page_m), vma_m->vm_page_prot);
++	page_cache_get(page_m);
++	page_add_anon_rmap(page_m, vma_m, address_m);
++	inc_mm_counter_fast(mm, MM_ANONPAGES);
++	set_pte_at(mm, address_m, pte_m, entry_m);
++	update_mmu_cache(vma_m, address_m, entry_m);
++out:
++	if (ptl != ptl_m)
++		spin_unlock(ptl_m);
++	pte_unmap(pte_m);
++	unlock_page(page_m);
++}
++
++void pax_mirror_file_pte(struct vm_area_struct *vma, unsigned long address, struct page *page_m, spinlock_t *ptl)
++{
++	struct mm_struct *mm = vma->vm_mm;
++	unsigned long address_m;
++	spinlock_t *ptl_m;
++	struct vm_area_struct *vma_m;
++	pmd_t *pmd_m;
++	pte_t *pte_m, entry_m;
++
++	BUG_ON(!page_m || PageAnon(page_m));
++
++	vma_m = pax_find_mirror_vma(vma);
++	if (!vma_m)
++		return;
++
++	BUG_ON(address >= SEGMEXEC_TASK_SIZE);
++	address_m = address + SEGMEXEC_TASK_SIZE;
++	pmd_m = pmd_offset(pud_offset(pgd_offset(mm, address_m), address_m), address_m);
++	pte_m = pte_offset_map(pmd_m, address_m);
++	ptl_m = pte_lockptr(mm, pmd_m);
++	if (ptl != ptl_m) {
++		spin_lock_nested(ptl_m, SINGLE_DEPTH_NESTING);
++		if (!pte_none(*pte_m))
++			goto out;
++	}
++
++	entry_m = pfn_pte(page_to_pfn(page_m), vma_m->vm_page_prot);
++	page_cache_get(page_m);
++	page_add_file_rmap(page_m);
++	inc_mm_counter_fast(mm, MM_FILEPAGES);
++	set_pte_at(mm, address_m, pte_m, entry_m);
++	update_mmu_cache(vma_m, address_m, entry_m);
++out:
++	if (ptl != ptl_m)
++		spin_unlock(ptl_m);
++	pte_unmap(pte_m);
++}
++
++static void pax_mirror_pfn_pte(struct vm_area_struct *vma, unsigned long address, unsigned long pfn_m, spinlock_t *ptl)
++{
++	struct mm_struct *mm = vma->vm_mm;
++	unsigned long address_m;
++	spinlock_t *ptl_m;
++	struct vm_area_struct *vma_m;
++	pmd_t *pmd_m;
++	pte_t *pte_m, entry_m;
++
++	vma_m = pax_find_mirror_vma(vma);
++	if (!vma_m)
++		return;
++
++	BUG_ON(address >= SEGMEXEC_TASK_SIZE);
++	address_m = address + SEGMEXEC_TASK_SIZE;
++	pmd_m = pmd_offset(pud_offset(pgd_offset(mm, address_m), address_m), address_m);
++	pte_m = pte_offset_map(pmd_m, address_m);
++	ptl_m = pte_lockptr(mm, pmd_m);
++	if (ptl != ptl_m) {
++		spin_lock_nested(ptl_m, SINGLE_DEPTH_NESTING);
++		if (!pte_none(*pte_m))
++			goto out;
++	}
++
++	entry_m = pfn_pte(pfn_m, vma_m->vm_page_prot);
++	set_pte_at(mm, address_m, pte_m, entry_m);
++out:
++	if (ptl != ptl_m)
++		spin_unlock(ptl_m);
++	pte_unmap(pte_m);
++}
++
++static void pax_mirror_pte(struct vm_area_struct *vma, unsigned long address, pte_t *pte, pmd_t *pmd, spinlock_t *ptl)
++{
++	struct page *page_m;
++	pte_t entry;
++
++	if (!(vma->vm_mm->pax_flags & MF_PAX_SEGMEXEC))
++		goto out;
++
++	entry = *pte;
++	page_m  = vm_normal_page(vma, address, entry);
++	if (!page_m)
++		pax_mirror_pfn_pte(vma, address, pte_pfn(entry), ptl);
++	else if (PageAnon(page_m)) {
++		if (pax_find_mirror_vma(vma)) {
++			pte_unmap_unlock(pte, ptl);
++			lock_page(page_m);
++			pte = pte_offset_map_lock(vma->vm_mm, pmd, address, &ptl);
++			if (pte_same(entry, *pte))
++				pax_mirror_anon_pte(vma, address, page_m, ptl);
++			else
++				unlock_page(page_m);
++		}
++	} else
++		pax_mirror_file_pte(vma, address, page_m, ptl);
++
++out:
++	pte_unmap_unlock(pte, ptl);
++}
++#endif
++
++
+ /*
+- * This routine handles present pages, when users try to write
++ * Ths routine handles present pages, when users try to write
+  * to a shared page. It is done by copying the page to a new address
+  * and decrementing the shared-page counter for the old page.
+  *
+@@ -2688,6 +2887,12 @@ gotten:
+ 	 */
+ 	page_table = pte_offset_map_lock(mm, pmd, address, &ptl);
+ 	if (likely(pte_same(*page_table, orig_pte))) {
++
++#ifdef CONFIG_PAX_SEGMEXEC
++		if (pax_find_mirror_vma(vma))
++			BUG_ON(!trylock_page(new_page));
++#endif
++
+ 		if (old_page) {
+ 			if (!PageAnon(old_page)) {
+ 				dec_mm_counter_fast(mm, MM_FILEPAGES);
+@@ -2739,6 +2944,10 @@ gotten:
+ 			page_remove_rmap(old_page);
+ 		}
+ 
++#ifdef CONFIG_PAX_SEGMEXEC
++		pax_mirror_anon_pte(vma, address, new_page, ptl);
++#endif
++
+ 		/* Free the old page.. */
+ 		new_page = old_page;
+ 		ret |= VM_FAULT_WRITE;
+@@ -3028,6 +3237,11 @@ static int do_swap_page(struct mm_struct *mm, struct vm_area_struct *vma,
+ 	swap_free(entry);
+ 	if (vm_swap_full() || (vma->vm_flags & VM_LOCKED) || PageMlocked(page))
+ 		try_to_free_swap(page);
++
++#ifdef CONFIG_PAX_SEGMEXEC
++	if ((flags & FAULT_FLAG_WRITE) || !pax_find_mirror_vma(vma))
++#endif
++
+ 	unlock_page(page);
+ 	if (swapcache) {
+ 		/*
+@@ -3051,6 +3265,11 @@ static int do_swap_page(struct mm_struct *mm, struct vm_area_struct *vma,
+ 
+ 	/* No need to invalidate - it was non-present before */
+ 	update_mmu_cache(vma, address, page_table);
++
++#ifdef CONFIG_PAX_SEGMEXEC
++	pax_mirror_anon_pte(vma, address, page, ptl);
++#endif
++
+ unlock:
+ 	pte_unmap_unlock(page_table, ptl);
+ out:
+@@ -3069,39 +3288,6 @@ out_release:
+ 	return ret;
+ }
+ 
+-/*
+- * This is like a special single-page "expand_{down|up}wards()",
+- * except we must first make sure that 'address{-|+}PAGE_SIZE'
+- * doesn't hit another vma.
+- */
+-static inline int check_stack_guard_page(struct vm_area_struct *vma, unsigned long address)
+-{
+-	address &= PAGE_MASK;
+-	if ((vma->vm_flags & VM_GROWSDOWN) && address == vma->vm_start) {
+-		struct vm_area_struct *prev = vma->vm_prev;
+-
+-		/*
+-		 * Is there a mapping abutting this one below?
+-		 *
+-		 * That's only ok if it's the same stack mapping
+-		 * that has gotten split..
+-		 */
+-		if (prev && prev->vm_end == address)
+-			return prev->vm_flags & VM_GROWSDOWN ? 0 : -ENOMEM;
+-
+-		expand_downwards(vma, address - PAGE_SIZE);
+-	}
+-	if ((vma->vm_flags & VM_GROWSUP) && address + PAGE_SIZE == vma->vm_end) {
+-		struct vm_area_struct *next = vma->vm_next;
+-
+-		/* As VM_GROWSDOWN but s/below/above/ */
+-		if (next && next->vm_start == address + PAGE_SIZE)
+-			return next->vm_flags & VM_GROWSUP ? 0 : -ENOMEM;
+-
+-		expand_upwards(vma, address + PAGE_SIZE);
+-	}
+-	return 0;
+-}
+ 
+ /*
+  * We enter with non-exclusive mmap_sem (to exclude vma changes,
+@@ -3112,27 +3298,23 @@ static int do_anonymous_page(struct mm_struct *mm, struct vm_area_struct *vma,
+ 		unsigned long address, pte_t *page_table, pmd_t *pmd,
+ 		unsigned int flags)
+ {
+-	struct page *page;
++	struct page *page = NULL;
+ 	spinlock_t *ptl;
+ 	pte_t entry;
+ 
+-	pte_unmap(page_table);
+-
+-	/* Check if we need to add a guard page to the stack */
+-	if (check_stack_guard_page(vma, address) < 0)
+-		return VM_FAULT_SIGBUS;
+-
+-	/* Use the zero-page for reads */
+ 	if (!(flags & FAULT_FLAG_WRITE)) {
+ 		entry = pte_mkspecial(pfn_pte(my_zero_pfn(address),
+ 						vma->vm_page_prot));
+-		page_table = pte_offset_map_lock(mm, pmd, address, &ptl);
++		ptl = pte_lockptr(mm, pmd);
++		spin_lock(ptl);
+ 		if (!pte_none(*page_table))
+ 			goto unlock;
+ 		goto setpte;
+ 	}
+ 
+ 	/* Allocate our own private page. */
++	pte_unmap(page_table);
++
+ 	if (unlikely(anon_vma_prepare(vma)))
+ 		goto oom;
+ 	page = alloc_zeroed_user_highpage_movable(vma, address);
+@@ -3151,6 +3333,11 @@ static int do_anonymous_page(struct mm_struct *mm, struct vm_area_struct *vma,
+ 	if (!pte_none(*page_table))
+ 		goto release;
+ 
++#ifdef CONFIG_PAX_SEGMEXEC
++	if (pax_find_mirror_vma(vma))
++		BUG_ON(!trylock_page(page));
++#endif
++
+ 	inc_mm_counter_fast(mm, MM_ANONPAGES);
+ 	page_add_new_anon_rmap(page, vma, address);
+ setpte:
+@@ -3158,6 +3345,12 @@ setpte:
+ 
+ 	/* No need to invalidate - it was non-present before */
+ 	update_mmu_cache(vma, address, page_table);
++
++#ifdef CONFIG_PAX_SEGMEXEC
++	if (page)
++		pax_mirror_anon_pte(vma, address, page, ptl);
++#endif
++
+ unlock:
+ 	pte_unmap_unlock(page_table, ptl);
+ 	return 0;
+@@ -3301,6 +3494,12 @@ static int __do_fault(struct mm_struct *mm, struct vm_area_struct *vma,
+ 	 */
+ 	/* Only go through if we didn't race with anybody else... */
+ 	if (likely(pte_same(*page_table, orig_pte))) {
++
++#ifdef CONFIG_PAX_SEGMEXEC
++		if (anon && pax_find_mirror_vma(vma))
++			BUG_ON(!trylock_page(page));
++#endif
++
+ 		flush_icache_page(vma, page);
+ 		entry = mk_pte(page, vma->vm_page_prot);
+ 		if (flags & FAULT_FLAG_WRITE)
+@@ -3320,6 +3519,14 @@ static int __do_fault(struct mm_struct *mm, struct vm_area_struct *vma,
+ 
+ 		/* no need to invalidate: a not-present page won't be cached */
+ 		update_mmu_cache(vma, address, page_table);
++
++#ifdef CONFIG_PAX_SEGMEXEC
++		if (anon)
++			pax_mirror_anon_pte(vma, address, page, ptl);
++		else
++			pax_mirror_file_pte(vma, address, page, ptl);
++#endif
++
+ 	} else {
+ 		if (cow_page)
+ 			mem_cgroup_uncharge_page(cow_page);
+@@ -3473,6 +3680,12 @@ int handle_pte_fault(struct mm_struct *mm,
+ 		if (flags & FAULT_FLAG_WRITE)
+ 			flush_tlb_fix_spurious_fault(vma, address);
+ 	}
++
++#ifdef CONFIG_PAX_SEGMEXEC
++	pax_mirror_pte(vma, address, pte, pmd, ptl);
++	return 0;
++#endif
++
+ unlock:
+ 	pte_unmap_unlock(pte, ptl);
+ 	return 0;
+@@ -3489,6 +3702,10 @@ int handle_mm_fault(struct mm_struct *mm, struct vm_area_struct *vma,
+ 	pmd_t *pmd;
+ 	pte_t *pte;
+ 
++#ifdef CONFIG_PAX_SEGMEXEC
++	struct vm_area_struct *vma_m;
++#endif
++
+ 	__set_current_state(TASK_RUNNING);
+ 
+ 	count_vm_event(PGFAULT);
+@@ -3500,6 +3717,34 @@ int handle_mm_fault(struct mm_struct *mm, struct vm_area_struct *vma,
+ 	if (unlikely(is_vm_hugetlb_page(vma)))
+ 		return hugetlb_fault(mm, vma, address, flags);
+ 
++#ifdef CONFIG_PAX_SEGMEXEC
++	vma_m = pax_find_mirror_vma(vma);
++	if (vma_m) {
++		unsigned long address_m;
++		pgd_t *pgd_m;
++		pud_t *pud_m;
++		pmd_t *pmd_m;
++
++		if (vma->vm_start > vma_m->vm_start) {
++			address_m = address;
++			address -= SEGMEXEC_TASK_SIZE;
++			vma = vma_m;
++		} else
++			address_m = address + SEGMEXEC_TASK_SIZE;
++
++		pgd_m = pgd_offset(mm, address_m);
++		pud_m = pud_alloc(mm, pgd_m, address_m);
++		if (!pud_m)
++			return VM_FAULT_OOM;
++		pmd_m = pmd_alloc(mm, pud_m, address_m);
++		if (!pmd_m)
++			return VM_FAULT_OOM;
++		if (!pmd_present(*pmd_m) && __pte_alloc(mm, vma_m, pmd_m, address_m))
++			return VM_FAULT_OOM;
++		pax_unmap_mirror_pte(vma_m, address_m, pmd_m);
++	}
++#endif
++
+ 	pgd = pgd_offset(mm, address);
+ 	pud = pud_alloc(mm, pgd, address);
+ 	if (!pud)
+@@ -3529,7 +3774,7 @@ int handle_mm_fault(struct mm_struct *mm, struct vm_area_struct *vma,
+ 	 * run pte_offset_map on the pmd, if an huge pmd could
+ 	 * materialize from under us from a different thread.
+ 	 */
+-	if (unlikely(pmd_none(*pmd)) && __pte_alloc(mm, vma, pmd, address))
++	if (unlikely(pmd_none(*pmd) && __pte_alloc(mm, vma, pmd, address)))
+ 		return VM_FAULT_OOM;
+ 	/* if an huge pmd materialized from under us just retry later */
+ 	if (unlikely(pmd_trans_huge(*pmd)))
+@@ -3566,6 +3811,23 @@ int __pud_alloc(struct mm_struct *mm, pgd_t *pgd, unsigned long address)
+ 	spin_unlock(&mm->page_table_lock);
+ 	return 0;
+ }
++
++int __pud_alloc_kernel(struct mm_struct *mm, pgd_t *pgd, unsigned long address)
++{
++	pud_t *new = pud_alloc_one(mm, address);
++	if (!new)
++		return -ENOMEM;
++
++	smp_wmb(); /* See comment in __pte_alloc */
++
++	spin_lock(&mm->page_table_lock);
++	if (pgd_present(*pgd))		/* Another has populated it */
++		pud_free(mm, new);
++	else
++		pgd_populate_kernel(mm, pgd, new);
++	spin_unlock(&mm->page_table_lock);
++	return 0;
++}
+ #endif /* __PAGETABLE_PUD_FOLDED */
+ 
+ #ifndef __PAGETABLE_PMD_FOLDED
+@@ -3596,11 +3858,36 @@ int __pmd_alloc(struct mm_struct *mm, pud_t *pud, unsigned long address)
+ 	spin_unlock(&mm->page_table_lock);
+ 	return 0;
+ }
++
++int __pmd_alloc_kernel(struct mm_struct *mm, pud_t *pud, unsigned long address)
++{
++	pmd_t *new = pmd_alloc_one(mm, address);
++	if (!new)
++		return -ENOMEM;
++
++	smp_wmb(); /* See comment in __pte_alloc */
++
++	spin_lock(&mm->page_table_lock);
++#ifndef __ARCH_HAS_4LEVEL_HACK
++	if (pud_present(*pud))		/* Another has populated it */
++		pmd_free(mm, new);
++	else
++		pud_populate_kernel(mm, pud, new);
++#else
++	if (pgd_present(*pud))		/* Another has populated it */
++		pmd_free(mm, new);
++	else
++		pgd_populate_kernel(mm, pud, new);
++#endif /* __ARCH_HAS_4LEVEL_HACK */
++	spin_unlock(&mm->page_table_lock);
++	return 0;
++}
++
+ #endif /* __PAGETABLE_PMD_FOLDED */
+ 
+-int make_pages_present(unsigned long addr, unsigned long end)
++ssize_t make_pages_present(unsigned long addr, unsigned long end)
+ {
+-	int ret, len, write;
++	ssize_t ret, len, write;
+ 	struct vm_area_struct * vma;
+ 
+ 	vma = find_vma(current->mm, addr);
+@@ -3633,7 +3920,7 @@ static int __init gate_vma_init(void)
+ 	gate_vma.vm_start = FIXADDR_USER_START;
+ 	gate_vma.vm_end = FIXADDR_USER_END;
+ 	gate_vma.vm_flags = VM_READ | VM_MAYREAD | VM_EXEC | VM_MAYEXEC;
+-	gate_vma.vm_page_prot = __P101;
++	gate_vma.vm_page_prot = vm_get_page_prot(gate_vma.vm_flags);
+ 
+ 	return 0;
+ }
+@@ -3767,8 +4054,8 @@ out:
+ 	return ret;
+ }
+ 
+-int generic_access_phys(struct vm_area_struct *vma, unsigned long addr,
+-			void *buf, int len, int write)
++ssize_t generic_access_phys(struct vm_area_struct *vma, unsigned long addr,
++			void *buf, size_t len, int write)
+ {
+ 	resource_size_t phys_addr;
+ 	unsigned long prot = 0;
+@@ -3793,8 +4080,8 @@ int generic_access_phys(struct vm_area_struct *vma, unsigned long addr,
+  * Access another process' address space as given in mm.  If non-NULL, use the
+  * given task for page fault accounting.
+  */
+-static int __access_remote_vm(struct task_struct *tsk, struct mm_struct *mm,
+-		unsigned long addr, void *buf, int len, int write)
++static ssize_t __access_remote_vm(struct task_struct *tsk, struct mm_struct *mm,
++		unsigned long addr, void *buf, size_t len, int write)
+ {
+ 	struct vm_area_struct *vma;
+ 	void *old_buf = buf;
+@@ -3802,7 +4089,7 @@ static int __access_remote_vm(struct task_struct *tsk, struct mm_struct *mm,
+ 	down_read(&mm->mmap_sem);
+ 	/* ignore errors, just check how much was successfully transferred */
+ 	while (len) {
+-		int bytes, ret, offset;
++		ssize_t bytes, ret, offset;
+ 		void *maddr;
+ 		struct page *page = NULL;
+ 
+@@ -3861,7 +4148,7 @@ static int __access_remote_vm(struct task_struct *tsk, struct mm_struct *mm,
+  *
+  * The caller must hold a reference on @mm.
+  */
+-int access_remote_vm(struct mm_struct *mm, unsigned long addr,
++ssize_t access_remote_vm(struct mm_struct *mm, unsigned long addr,
+ 		void *buf, int len, int write)
+ {
+ 	return __access_remote_vm(NULL, mm, addr, buf, len, write);
+@@ -3872,11 +4159,11 @@ int access_remote_vm(struct mm_struct *mm, unsigned long addr,
+  * Source/target buffer must be kernel space,
+  * Do not walk the page table directly, use get_user_pages
+  */
+-int access_process_vm(struct task_struct *tsk, unsigned long addr,
++ssize_t access_process_vm(struct task_struct *tsk, unsigned long addr,
+ 		void *buf, int len, int write)
+ {
+ 	struct mm_struct *mm;
+-	int ret;
++	ssize_t ret;
+ 
+ 	mm = get_task_mm(tsk);
+ 	if (!mm)
 diff --git a/mm/mempolicy.c b/mm/mempolicy.c
 index a786980..1e4f734 100644
 --- a/mm/mempolicy.c
@@ -22379,6 +23206,88 @@ index 1107238..d6f078c 100644
  		rcu_read_unlock();
  		err = -EPERM;
  		goto out;
+diff --git a/mm/mlock.c b/mm/mlock.c
+index 263e49d..d9a38e8 100644
+--- a/mm/mlock.c
++++ b/mm/mlock.c
+@@ -13,6 +13,7 @@
+ #include <linux/pagemap.h>
+ #include <linux/mempolicy.h>
+ #include <linux/syscalls.h>
++#include <linux/security.h>
+ #include <linux/sched.h>
+ #include <linux/export.h>
+ #include <linux/rmap.h>
+@@ -377,7 +378,7 @@ static int do_mlock(unsigned long start, size_t len, int on)
+ {
+ 	unsigned long nstart, end, tmp;
+ 	struct vm_area_struct * vma, * prev;
+-	int error;
++	int error = 0;
+ 
+ 	VM_BUG_ON(start & ~PAGE_MASK);
+ 	VM_BUG_ON(len != PAGE_ALIGN(len));
+@@ -386,6 +387,9 @@ static int do_mlock(unsigned long start, size_t len, int on)
+ 		return -EINVAL;
+ 	if (end == start)
+ 		return 0;
++	if (end > TASK_SIZE)
++		return -EINVAL;
++
+ 	vma = find_vma(current->mm, start);
+ 	if (!vma || vma->vm_start > start)
+ 		return -ENOMEM;
+@@ -397,6 +401,11 @@ static int do_mlock(unsigned long start, size_t len, int on)
+ 	for (nstart = start ; ; ) {
+ 		vm_flags_t newflags;
+ 
++#ifdef CONFIG_PAX_SEGMEXEC
++		if ((current->mm->pax_flags & MF_PAX_SEGMEXEC) && (vma->vm_start >= SEGMEXEC_TASK_SIZE))
++			break;
++#endif
++
+ 		/* Here we know that  vma->vm_start <= nstart < vma->vm_end. */
+ 
+ 		newflags = vma->vm_flags | VM_LOCKED;
+@@ -502,6 +511,7 @@ SYSCALL_DEFINE2(mlock, unsigned long, start, size_t, len)
+ 	lock_limit >>= PAGE_SHIFT;
+ 
+ 	/* check against resource limits */
++	gr_learn_resource(current, RLIMIT_MEMLOCK, (current->mm->locked_vm << PAGE_SHIFT) + len, 1);
+ 	if ((locked <= lock_limit) || capable(CAP_IPC_LOCK))
+ 		error = do_mlock(start, len, 1);
+ 	up_write(&current->mm->mmap_sem);
+@@ -528,14 +538,20 @@ static int do_mlockall(int flags)
+ 	unsigned int def_flags = 0;
+ 
+ 	if (flags & MCL_FUTURE)
+-		def_flags = VM_LOCKED;
+-	current->mm->def_flags = def_flags;
++		current->mm->def_flags |= VM_LOCKED;
++	else
++		current->mm->def_flags &= ~VM_LOCKED;
+ 	if (flags == MCL_FUTURE)
+ 		goto out;
+ 
+ 	for (vma = current->mm->mmap; vma ; vma = prev->vm_next) {
+ 		vm_flags_t newflags;
+ 
++#ifdef CONFIG_PAX_SEGMEXEC
++		if ((current->mm->pax_flags & MF_PAX_SEGMEXEC) && (vma->vm_start >= SEGMEXEC_TASK_SIZE))
++			break;
++#endif
++
+ 		newflags = vma->vm_flags | VM_LOCKED;
+ 		if (!(flags & MCL_CURRENT))
+ 			newflags &= ~VM_LOCKED;
+@@ -568,6 +584,7 @@ SYSCALL_DEFINE1(mlockall, int, flags)
+ 	lock_limit >>= PAGE_SHIFT;
+ 
+ 	ret = -ENOMEM;
++	gr_learn_resource(current, RLIMIT_MEMLOCK, current->mm->total_vm << PAGE_SHIFT, 1);
+ 	if (!(flags & MCL_CURRENT) || (current->mm->total_vm <= lock_limit) ||
+ 	    capable(CAP_IPC_LOCK))
+ 		ret = do_mlockall(flags);
 diff --git a/mm/mm_init.c b/mm/mm_init.c
 index 1ffd97a..ed75674 100644
 --- a/mm/mm_init.c
@@ -22416,6 +23325,1411 @@ index 1ffd97a..ed75674 100644
 +
  #ifdef CONFIG_DEBUG_MEMORY_INIT
  int mminit_loglevel;
+ 
+diff --git a/mm/mmap.c b/mm/mmap.c
+index ded6fe9..80610d6 100644
+--- a/mm/mmap.c
++++ b/mm/mmap.c
+@@ -30,6 +30,7 @@
+ #include <linux/perf_event.h>
+ #include <linux/audit.h>
+ #include <linux/khugepaged.h>
++#include <linux/random.h>
+ 
+ #include <asm/uaccess.h>
+ #include <asm/cacheflush.h>
+@@ -46,6 +47,16 @@
+ #define arch_rebalance_pgtables(addr, len)		(addr)
+ #endif
+ 
++static inline void verify_mm_writelocked(struct mm_struct *mm)
++{
++#if defined(CONFIG_DEBUG_VM) || defined(CONFIG_PAX)
++	if (unlikely(down_read_trylock(&mm->mmap_sem))) {
++		up_read(&mm->mmap_sem);
++		BUG();
++	}
++#endif
++}
++
+ static void unmap_region(struct mm_struct *mm,
+ 		struct vm_area_struct *vma, struct vm_area_struct *prev,
+ 		unsigned long start, unsigned long end);
+@@ -71,22 +82,32 @@ static void unmap_region(struct mm_struct *mm,
+  *		x: (no) no	x: (no) yes	x: (no) yes	x: (yes) yes
+  *
+  */
+-pgprot_t protection_map[16] = {
++pgprot_t protection_map[16] __read_only = {
+ 	__P000, __P001, __P010, __P011, __P100, __P101, __P110, __P111,
+ 	__S000, __S001, __S010, __S011, __S100, __S101, __S110, __S111
+ };
+ 
+-pgprot_t vm_get_page_prot(unsigned long vm_flags)
++pgprot_t vm_get_page_prot(vm_flags_t vm_flags)
+ {
+-	return __pgprot(pgprot_val(protection_map[vm_flags &
++	pgprot_t prot = __pgprot(pgprot_val(protection_map[vm_flags &
+ 				(VM_READ|VM_WRITE|VM_EXEC|VM_SHARED)]) |
+ 			pgprot_val(arch_vm_get_page_prot(vm_flags)));
++
++#if defined(CONFIG_PAX_PAGEEXEC) && defined(CONFIG_X86_32)
++	if (!(__supported_pte_mask & _PAGE_NX) &&
++	    (vm_flags & (VM_PAGEEXEC | VM_EXEC)) == VM_PAGEEXEC &&
++	    (vm_flags & (VM_READ | VM_WRITE)))
++		prot = __pgprot(pte_val(pte_exprotect(__pte(pgprot_val(prot)))));
++#endif
++
++	return prot;
+ }
+ EXPORT_SYMBOL(vm_get_page_prot);
+ 
+ int sysctl_overcommit_memory __read_mostly = OVERCOMMIT_GUESS;  /* heuristic overcommit */
+ int sysctl_overcommit_ratio __read_mostly = 50;	/* default is 50% */
+ int sysctl_max_map_count __read_mostly = DEFAULT_MAX_MAP_COUNT;
++unsigned long sysctl_heap_stack_gap __read_mostly = 64*1024;
+ /*
+  * Make sure vm_committed_as in one cacheline and not cacheline shared with
+  * other variables. It can be updated by several CPUs frequently.
+@@ -228,6 +249,7 @@ static struct vm_area_struct *remove_vma(struct vm_area_struct *vma)
+ 	struct vm_area_struct *next = vma->vm_next;
+ 
+ 	might_sleep();
++	BUG_ON(vma->vm_mirror);
+ 	if (vma->vm_ops && vma->vm_ops->close)
+ 		vma->vm_ops->close(vma);
+ 	if (vma->vm_file) {
+@@ -274,6 +296,12 @@ SYSCALL_DEFINE1(brk, unsigned long, brk)
+ 	 * not page aligned -Ram Gupta
+ 	 */
+ 	rlim = rlimit(RLIMIT_DATA);
++#ifdef CONFIG_GRKERNSEC_PROC_MEMMAP
++	/* force a minimum 16MB brk heap on setuid/setgid binaries */
++	if (rlim < PAGE_SIZE && (get_dumpable(mm) != SUID_DUMPABLE_ENABLED) && current_uid())
++		rlim = 4096 * PAGE_SIZE;
++#endif
++	gr_learn_resource(current, RLIMIT_DATA, (brk - mm->start_brk) + (mm->end_data - mm->start_data), 1);
+ 	if (rlim < RLIM_INFINITY && (brk - mm->start_brk) +
+ 			(mm->end_data - mm->start_data) > rlim)
+ 		goto out;
+@@ -694,6 +722,12 @@ can_vma_merge_before(struct vm_area_struct *vma, unsigned long vm_flags,
+ 	struct anon_vma *anon_vma, struct file *file, pgoff_t vm_pgoff,
+ 	const char __user *anon_name)
+ {
++
++#ifdef CONFIG_PAX_SEGMEXEC
++	if ((vma->vm_mm->pax_flags & MF_PAX_SEGMEXEC) && vma->vm_start == SEGMEXEC_TASK_SIZE)
++		return 0;
++#endif
++
+ 	if (is_mergeable_vma(vma, file, vm_flags, anon_name) &&
+ 	    is_mergeable_anon_vma(anon_vma, vma->anon_vma, vma)) {
+ 		if (vma->vm_pgoff == vm_pgoff)
+@@ -714,6 +748,12 @@ can_vma_merge_after(struct vm_area_struct *vma, unsigned long vm_flags,
+ 	struct anon_vma *anon_vma, struct file *file, pgoff_t vm_pgoff,
+ 	const char __user *anon_name)
+ {
++
++#ifdef CONFIG_PAX_SEGMEXEC
++	if ((vma->vm_mm->pax_flags & MF_PAX_SEGMEXEC) && vma->vm_end == SEGMEXEC_TASK_SIZE)
++		return 0;
++#endif
++
+ 	if (is_mergeable_vma(vma, file, vm_flags, anon_name) &&
+ 	    is_mergeable_anon_vma(anon_vma, vma->anon_vma, vma)) {
+ 		pgoff_t vm_pglen;
+@@ -756,7 +796,7 @@ can_vma_merge_after(struct vm_area_struct *vma, unsigned long vm_flags,
+ struct vm_area_struct *vma_merge(struct mm_struct *mm,
+ 			struct vm_area_struct *prev, unsigned long addr,
+ 			unsigned long end, unsigned long vm_flags,
+-		     	struct anon_vma *anon_vma, struct file *file,
++			struct anon_vma *anon_vma, struct file *file,
+ 			pgoff_t pgoff, struct mempolicy *policy,
+ 			const char __user *anon_name)
+ {
+@@ -764,6 +804,13 @@ struct vm_area_struct *vma_merge(struct mm_struct *mm,
+ 	struct vm_area_struct *area, *next;
+ 	int err;
+ 
++#ifdef CONFIG_PAX_SEGMEXEC
++	unsigned long addr_m = addr + SEGMEXEC_TASK_SIZE, end_m = end + SEGMEXEC_TASK_SIZE;
++	struct vm_area_struct *area_m = NULL, *next_m = NULL, *prev_m = NULL;
++
++	BUG_ON((mm->pax_flags & MF_PAX_SEGMEXEC) && SEGMEXEC_TASK_SIZE < end);
++#endif
++
+ 	/*
+ 	 * We later require that vma->vm_flags == vm_flags,
+ 	 * so this tests vma->vm_flags & VM_SPECIAL, too.
+@@ -779,6 +826,15 @@ struct vm_area_struct *vma_merge(struct mm_struct *mm,
+ 	if (next && next->vm_end == end)		/* cases 6, 7, 8 */
+ 		next = next->vm_next;
+ 
++#ifdef CONFIG_PAX_SEGMEXEC
++	if (prev)
++		prev_m = pax_find_mirror_vma(prev);
++	if (area)
++		area_m = pax_find_mirror_vma(area);
++	if (next)
++		next_m = pax_find_mirror_vma(next);
++#endif
++
+ 	/*
+ 	 * Can it merge with the predecessor?
+ 	 */
+@@ -798,9 +854,24 @@ struct vm_area_struct *vma_merge(struct mm_struct *mm,
+ 							/* cases 1, 6 */
+ 			err = vma_adjust(prev, prev->vm_start,
+ 				next->vm_end, prev->vm_pgoff, NULL);
+-		} else					/* cases 2, 5, 7 */
++
++#ifdef CONFIG_PAX_SEGMEXEC
++			if (!err && prev_m)
++				err = vma_adjust(prev_m, prev_m->vm_start,
++					next_m->vm_end, prev_m->vm_pgoff, NULL);
++#endif
++
++		} else {				/* cases 2, 5, 7 */
+ 			err = vma_adjust(prev, prev->vm_start,
+ 				end, prev->vm_pgoff, NULL);
++
++#ifdef CONFIG_PAX_SEGMEXEC
++			if (!err && prev_m)
++				err = vma_adjust(prev_m, prev_m->vm_start,
++						end_m, prev_m->vm_pgoff, NULL);
++#endif
++
++		}
+ 		if (err)
+ 			return NULL;
+ 		khugepaged_enter_vma_merge(prev);
+@@ -814,12 +885,27 @@ struct vm_area_struct *vma_merge(struct mm_struct *mm,
+  			mpol_equal(policy, vma_policy(next)) &&
+ 			can_vma_merge_before(next, vm_flags, anon_vma,
+ 					file, pgoff+pglen, anon_name)) {
+-		if (prev && addr < prev->vm_end)	/* case 4 */
++		if (prev && addr < prev->vm_end) {	/* case 4 */
+ 			err = vma_adjust(prev, prev->vm_start,
+ 				addr, prev->vm_pgoff, NULL);
+-		else					/* cases 3, 8 */
++
++#ifdef CONFIG_PAX_SEGMEXEC
++			if (!err && prev_m)
++				err = vma_adjust(prev_m, prev_m->vm_start,
++						addr_m, prev_m->vm_pgoff, NULL);
++#endif
++
++		} else {				/* cases 3, 8 */
+ 			err = vma_adjust(area, addr, next->vm_end,
+ 				next->vm_pgoff - pglen, NULL);
++
++#ifdef CONFIG_PAX_SEGMEXEC
++			if (!err && area_m)
++				err = vma_adjust(area_m, addr_m, next_m->vm_end,
++						next_m->vm_pgoff - pglen, NULL);
++#endif
++
++		}
+ 		if (err)
+ 			return NULL;
+ 		khugepaged_enter_vma_merge(area);
+@@ -928,15 +1014,22 @@ none:
+ void vm_stat_account(struct mm_struct *mm, unsigned long flags,
+ 						struct file *file, long pages)
+ {
+-	const unsigned long stack_flags
+-		= VM_STACK_FLAGS & (VM_GROWSUP|VM_GROWSDOWN);
++
++#ifdef CONFIG_PAX_RANDMMAP
++	if (!(mm->pax_flags & MF_PAX_RANDMMAP) || (flags & (VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC)))
++#endif
++
++	mm->total_vm += pages;
+ 
+ 	if (file) {
+ 		mm->shared_vm += pages;
+ 		if ((flags & (VM_EXEC|VM_WRITE)) == VM_EXEC)
+ 			mm->exec_vm += pages;
+-	} else if (flags & stack_flags)
++	} else if (flags & (VM_GROWSUP|VM_GROWSDOWN))
+ 		mm->stack_vm += pages;
++#ifdef CONFIG_PAX_RANDMMAP
++	if (!(mm->pax_flags & MF_PAX_RANDMMAP) || (flags & (VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC)))
++#endif
+ 	if (flags & (VM_RESERVED|VM_IO))
+ 		mm->reserved_vm += pages;
+ }
+@@ -975,7 +1068,7 @@ static unsigned long do_mmap_pgoff(struct file *file, unsigned long addr,
+ 	 * (the exception is when the underlying filesystem is noexec
+ 	 *  mounted, in which case we dont add PROT_EXEC.)
+ 	 */
+-	if ((prot & PROT_READ) && (current->personality & READ_IMPLIES_EXEC))
++	if ((prot & (PROT_READ | PROT_WRITE)) && (current->personality & READ_IMPLIES_EXEC))
+ 		if (!(file && (file->f_path.mnt->mnt_flags & MNT_NOEXEC)))
+ 			prot |= PROT_EXEC;
+ 
+@@ -1001,7 +1094,7 @@ static unsigned long do_mmap_pgoff(struct file *file, unsigned long addr,
+ 	/* Obtain the address to map to. we verify (or select) it and ensure
+ 	 * that it represents a valid section of the address space.
+ 	 */
+-	addr = get_unmapped_area(file, addr, len, pgoff, flags);
++	addr = get_unmapped_area(file, addr, len, pgoff, flags | ((prot & PROT_EXEC) ? MAP_EXECUTABLE : 0));
+ 	if (addr & ~PAGE_MASK)
+ 		return addr;
+ 
+@@ -1012,6 +1105,43 @@ static unsigned long do_mmap_pgoff(struct file *file, unsigned long addr,
+ 	vm_flags = calc_vm_prot_bits(prot) | calc_vm_flag_bits(flags) |
+ 			mm->def_flags | VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC;
+ 
++#ifdef CONFIG_PAX_MPROTECT
++	if (mm->pax_flags & MF_PAX_MPROTECT) {
++
++#ifdef CONFIG_GRKERNSEC_RWXMAP_LOG
++		if (file && !pgoff && (vm_flags & VM_EXEC) && mm->binfmt &&
++		    mm->binfmt->handle_mmap)
++			mm->binfmt->handle_mmap(file);
++#endif
++
++#ifndef CONFIG_PAX_MPROTECT_COMPAT
++		if ((vm_flags & (VM_WRITE | VM_EXEC)) == (VM_WRITE | VM_EXEC)) {
++			gr_log_rwxmmap(file);
++
++#ifdef CONFIG_PAX_EMUPLT
++			vm_flags &= ~VM_EXEC;
++#else
++			return -EPERM;
++#endif
++
++		}
++
++		if (!(vm_flags & VM_EXEC))
++			vm_flags &= ~VM_MAYEXEC;
++#else
++		if ((vm_flags & (VM_WRITE | VM_EXEC)) != VM_EXEC)
++			vm_flags &= ~(VM_EXEC | VM_MAYEXEC);
++#endif
++		else
++			vm_flags &= ~VM_MAYWRITE;
++	}
++#endif
++
++#if defined(CONFIG_PAX_PAGEEXEC) && defined(CONFIG_X86_32)
++	if ((mm->pax_flags & MF_PAX_PAGEEXEC) && file)
++		vm_flags &= ~VM_PAGEEXEC;
++#endif
++
+ 	if (flags & MAP_LOCKED)
+ 		if (!can_do_mlock())
+ 			return -EPERM;
+@@ -1023,6 +1153,7 @@ static unsigned long do_mmap_pgoff(struct file *file, unsigned long addr,
+ 		locked += mm->locked_vm;
+ 		lock_limit = rlimit(RLIMIT_MEMLOCK);
+ 		lock_limit >>= PAGE_SHIFT;
++		gr_learn_resource(current, RLIMIT_MEMLOCK, locked << PAGE_SHIFT, 1);
+ 		if (locked > lock_limit && !capable(CAP_IPC_LOCK))
+ 			return -EAGAIN;
+ 	}
+@@ -1093,6 +1224,9 @@ static unsigned long do_mmap_pgoff(struct file *file, unsigned long addr,
+ 	if (error)
+ 		return error;
+ 
++	if (!gr_acl_handle_mmap(file, prot))
++		return -EACCES;
++
+ 	return mmap_region(file, addr, len, flags, vm_flags, pgoff);
+ }
+ 
+@@ -1198,7 +1332,7 @@ int vma_wants_writenotify(struct vm_area_struct *vma)
+ 	vm_flags_t vm_flags = vma->vm_flags;
+ 
+ 	/* If it was private or non-writable, the write bit is already clear */
+-	if ((vm_flags & (VM_WRITE|VM_SHARED)) != ((VM_WRITE|VM_SHARED)))
++	if ((vm_flags & (VM_WRITE|VM_SHARED)) != (VM_WRITE|VM_SHARED))
+ 		return 0;
+ 
+ 	/* The backer wishes to know when pages are first written to? */
+@@ -1247,17 +1381,31 @@ unsigned long mmap_region(struct file *file, unsigned long addr,
+ 	unsigned long charged = 0;
+ 	struct inode *inode =  file ? file->f_path.dentry->d_inode : NULL;
+ 
++#ifdef CONFIG_PAX_SEGMEXEC
++	struct vm_area_struct *vma_m = NULL;
++#endif
++
++	/*
++	 * mm->mmap_sem is required to protect against another thread
++	 * changing the mappings in case we sleep.
++	 */
++	verify_mm_writelocked(mm);
++
+ 	/* Clear old maps */
+ 	error = -ENOMEM;
+-munmap_back:
+ 	vma = find_vma_prepare(mm, addr, &prev, &rb_link, &rb_parent);
+ 	if (vma && vma->vm_start < addr + len) {
+ 		if (do_munmap(mm, addr, len))
+ 			return -ENOMEM;
+-		goto munmap_back;
++		vma = find_vma_prepare(mm, addr, &prev, &rb_link, &rb_parent);
++		BUG_ON(vma && vma->vm_start < addr + len);
+ 	}
+ 
+ 	/* Check against address space limit. */
++
++#ifdef CONFIG_PAX_RANDMMAP
++	if (!(mm->pax_flags & MF_PAX_RANDMMAP) || (vm_flags & (VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC)))
++#endif
+ 	if (!may_expand_vm(mm, len >> PAGE_SHIFT))
+ 		return -ENOMEM;
+ 
+@@ -1304,6 +1452,16 @@ munmap_back:
+ 		goto unacct_error;
+ 	}
+ 
++#ifdef CONFIG_PAX_SEGMEXEC
++	if ((mm->pax_flags & MF_PAX_SEGMEXEC) && (vm_flags & VM_EXEC)) {
++		vma_m = kmem_cache_zalloc(vm_area_cachep, GFP_KERNEL);
++		if (!vma_m) {
++			error = -ENOMEM;
++			goto free_vma;
++		}
++	}
++#endif
++
+ 	vma->vm_mm = mm;
+ 	vma->vm_start = addr;
+ 	vma->vm_end = addr + len;
+@@ -1328,6 +1486,19 @@ munmap_back:
+ 		error = file->f_op->mmap(file, vma);
+ 		if (error)
+ 			goto unmap_and_free_vma;
++
++#ifdef CONFIG_PAX_SEGMEXEC
++		if (vma_m && (vm_flags & VM_EXECUTABLE))
++			added_exe_file_vma(mm);
++#endif
++
++#if defined(CONFIG_PAX_PAGEEXEC) && defined(CONFIG_X86_32)
++		if ((mm->pax_flags & MF_PAX_PAGEEXEC) && !(vma->vm_flags & VM_SPECIAL)) {
++			vma->vm_flags |= VM_PAGEEXEC;
++			vma->vm_page_prot = vm_get_page_prot(vma->vm_flags);
++		}
++#endif
++
+ 		if (vm_flags & VM_EXECUTABLE)
+ 			added_exe_file_vma(mm);
+ 
+@@ -1365,14 +1536,19 @@ munmap_back:
+ 	vma_link(mm, vma, prev, rb_link, rb_parent);
+ 	file = vma->vm_file;
+ 
++#ifdef CONFIG_PAX_SEGMEXEC
++	if (vma_m)
++		BUG_ON(pax_mirror_vma(vma_m, vma));
++#endif
++
+ 	/* Once vma denies write, undo our temporary denial count */
+ 	if (correct_wcount)
+ 		atomic_inc(&inode->i_writecount);
+ out:
+ 	perf_event_mmap(vma);
+ 
+-	mm->total_vm += len >> PAGE_SHIFT;
+ 	vm_stat_account(mm, vm_flags, file, len >> PAGE_SHIFT);
++	track_exec_limit(mm, addr, addr + len, vm_flags);
+ 	if (vm_flags & VM_LOCKED) {
+ 		if (!mlock_vma_pages_range(vma, addr, addr + len))
+ 			mm->locked_vm += (len >> PAGE_SHIFT);
+@@ -1390,6 +1566,12 @@ unmap_and_free_vma:
+ 	unmap_region(mm, vma, prev, vma->vm_start, vma->vm_end);
+ 	charged = 0;
+ free_vma:
++
++#ifdef CONFIG_PAX_SEGMEXEC
++	if (vma_m)
++		kmem_cache_free(vm_area_cachep, vma_m);
++#endif
++
+ 	kmem_cache_free(vm_area_cachep, vma);
+ unacct_error:
+ 	if (charged)
+@@ -1397,6 +1579,73 @@ unacct_error:
+ 	return error;
+ }
+ 
++#ifdef CONFIG_GRKERNSEC_RAND_THREADSTACK
++unsigned long gr_rand_threadstack_offset(const struct mm_struct *mm, const struct file *filp, unsigned long flags)
++{
++	if ((mm->pax_flags & MF_PAX_RANDMMAP) && !filp && (flags & MAP_STACK))
++		return ((random32() & 0xFF) + 1) << PAGE_SHIFT;
++
++	return 0;
++}
++#endif
++
++bool check_heap_stack_gap(const struct vm_area_struct *vma, unsigned long *addr, unsigned long len, unsigned long offset)
++{
++	if (!vma) {
++#ifdef CONFIG_STACK_GROWSUP
++		if (*addr > sysctl_heap_stack_gap)
++			vma = find_vma(current->mm, *addr - sysctl_heap_stack_gap);
++		else
++			vma = find_vma(current->mm, 0);
++		if (vma && (vma->vm_flags & VM_GROWSUP))
++			return false;
++#endif
++		return true;
++	}
++
++	if (*addr + len > vma->vm_start)
++		return false;
++
++	if (offset) {
++		if (vma->vm_prev && *addr == vma->vm_prev->vm_end && (vma->vm_start - len - vma->vm_prev->vm_end >= offset)) {
++			*addr = vma->vm_prev->vm_end + offset;
++			return true;
++		}
++		return offset <= vma->vm_start - *addr - len;
++	} else if (vma->vm_flags & VM_GROWSDOWN)
++		return sysctl_heap_stack_gap <= vma->vm_start - *addr - len;
++#ifdef CONFIG_STACK_GROWSUP
++	else if (vma->vm_prev && (vma->vm_prev->vm_flags & VM_GROWSUP)) {
++		if (*addr - vma->vm_prev->vm_end >= sysctl_heap_stack_gap)
++			return true;
++		if (vma->vm_start - len - vma->vm_prev->vm_end >= sysctl_heap_stack_gap) {
++			*addr = vma->vm_start - len;
++			return true;
++		}
++		return false;
++	}
++#endif
++
++	return true;
++}
++
++unsigned long skip_heap_stack_gap(const struct vm_area_struct *vma, unsigned long len, unsigned long offset)
++{
++	if (vma->vm_start < len)
++		return -ENOMEM;
++
++	if (!(vma->vm_flags & VM_GROWSDOWN)) {
++		if (offset <= vma->vm_start - len)
++			return vma->vm_start - len - offset;
++		else
++			return -ENOMEM;
++	}
++
++	if (sysctl_heap_stack_gap <= vma->vm_start - len)
++		return vma->vm_start - len - sysctl_heap_stack_gap;
++	return -ENOMEM;
++}
++
+ /* Get an address range which is currently unmapped.
+  * For shmat() with addr=0.
+  *
+@@ -1416,6 +1665,7 @@ arch_get_unmapped_area(struct file *filp, unsigned long addr,
+ 	struct mm_struct *mm = current->mm;
+ 	struct vm_area_struct *vma;
+ 	unsigned long start_addr;
++	unsigned long offset = gr_rand_threadstack_offset(mm, filp, flags);
+ 
+ 	if (len > TASK_SIZE)
+ 		return -ENOMEM;
+@@ -1423,18 +1673,22 @@ arch_get_unmapped_area(struct file *filp, unsigned long addr,
+ 	if (flags & MAP_FIXED)
+ 		return addr;
+ 
++#ifdef CONFIG_PAX_RANDMMAP
++	if (!(mm->pax_flags & MF_PAX_RANDMMAP))
++#endif
++
+ 	if (addr) {
+ 		addr = PAGE_ALIGN(addr);
+-		vma = find_vma(mm, addr);
+-		if (TASK_SIZE - len >= addr &&
+-		    (!vma || addr + len <= vma->vm_start))
+-			return addr;
++		if (TASK_SIZE - len >= addr) {
++			vma = find_vma(mm, addr);
++			if (addr >= mmap_min_addr && check_heap_stack_gap(vma, &addr, len, offset))
++				return addr;
+ 	}
+ 	if (len > mm->cached_hole_size) {
+-	        start_addr = addr = mm->free_area_cache;
++		start_addr = addr = mm->free_area_cache;
+ 	} else {
+-	        start_addr = addr = TASK_UNMAPPED_BASE;
+-	        mm->cached_hole_size = 0;
++		start_addr = addr = mm->mmap_base;
++		mm->cached_hole_size = 0;
+ 	}
+ 
+ full_search:
+@@ -1445,34 +1699,40 @@ full_search:
+ 			 * Start a new search - just in case we missed
+ 			 * some holes.
+ 			 */
+-			if (start_addr != TASK_UNMAPPED_BASE) {
+-				addr = TASK_UNMAPPED_BASE;
+-			        start_addr = addr;
++			if (start_addr != mm->mmap_base) {
++				start_addr = addr = mm->mmap_base;
+ 				mm->cached_hole_size = 0;
+ 				goto full_search;
+ 			}
+ 			return -ENOMEM;
+ 		}
+-		if (!vma || addr + len <= vma->vm_start) {
+-			/*
+-			 * Remember the place where we stopped the search:
+-			 */
+-			mm->free_area_cache = addr + len;
+-			return addr;
+-		}
++		if (check_heap_stack_gap(vma, &addr, len, offset))
++			break;
+ 		if (addr + mm->cached_hole_size < vma->vm_start)
+ 		        mm->cached_hole_size = vma->vm_start - addr;
+ 		addr = vma->vm_end;
+ 	}
++
++	/*
++	 * Remember the place where we stopped the search:
++	 */
++	mm->free_area_cache = addr + len;
++	return addr;
+ }
+ #endif	
+ 
+ void arch_unmap_area(struct mm_struct *mm, unsigned long addr)
+ {
++
++#ifdef CONFIG_PAX_SEGMEXEC
++	if ((mm->pax_flags & MF_PAX_SEGMEXEC) && SEGMEXEC_TASK_SIZE <= addr)
++		return;
++#endif
++
+ 	/*
+ 	 * Is this a new hole at the lowest possible address?
+ 	 */
+-	if (addr >= TASK_UNMAPPED_BASE && addr < mm->free_area_cache)
++	if (addr >= mm->mmap_base && addr < mm->free_area_cache) {
+ 		mm->free_area_cache = addr;
+ }
+ 
+@@ -1488,7 +1748,10 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
+ {
+ 	struct vm_area_struct *vma;
+ 	struct mm_struct *mm = current->mm;
+-	unsigned long addr = addr0, start_addr;
++	unsigned long base = mm->mmap_base, addr = addr0;
++	unsigned long offset = gr_rand_threadstack_offset(mm, filp, flags);
++
++	unsigned long start_addr;
+ 
+ 	/* requested length too big for entire address space */
+ 	if (len > TASK_SIZE)
+@@ -1497,13 +1760,17 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
+ 	if (flags & MAP_FIXED)
+ 		return addr;
+ 
++#ifdef CONFIG_PAX_RANDMMAP
++	if (!(mm->pax_flags & MF_PAX_RANDMMAP))
++#endif
++
+ 	/* requesting a specific address */
+ 	if (addr) {
+ 		addr = PAGE_ALIGN(addr);
+-		vma = find_vma(mm, addr);
+-		if (TASK_SIZE - len >= addr &&
+-				(!vma || addr + len <= vma->vm_start))
+-			return addr;
++		if (TASK_SIZE - len >= addr && addr >= mmap_min_addr) {
++			vma = find_vma(mm, addr);
++			if (check_heap_stack_gap(vma, &addr, len, offset))
++				return addr;
+ 	}
+ 
+ 	/* check if free_area_cache is useful for us */
+@@ -1519,7 +1786,16 @@ try_again:
+ 	if (addr < len)
+ 		goto fail;
+ 
+-	addr -= len;
++        /* make sure it can fit in the remaining address space */
++        if (addr >= low_limit + len) {
++                addr -= len;
++                vma = find_vma(mm, addr);
++                if (check_heap_stack_gap(vma, &addr, len, offset))
++                        /* remember the address as a hint for next time */
++                        return (mm->free_area_cache = addr);
++        }
++
++
+ 	do {
+ 		/*
+ 		 * Lookup failure means no vma is above this address,
+@@ -1527,7 +1803,7 @@ try_again:
+ 		 * return with success:
+ 		 */
+ 		vma = find_vma(mm, addr);
+-		if (!vma || addr+len <= vma->vm_start)
++		if (check_heap_stack_gap(vma, &addr, len, offset))
+ 			/* remember the address as a hint for next time */
+ 			return (mm->free_area_cache = addr);
+ 
+@@ -1536,8 +1812,8 @@ try_again:
+  		        mm->cached_hole_size = vma->vm_start - addr;
+ 
+ 		/* try just below the current vma->vm_start */
+-		addr = vma->vm_start-len;
+-	} while (len < vma->vm_start);
++		addr = skip_heap_stack_gap(vma, len, offset);
++	} while (!IS_ERR_VALUE(addr) && addr >= low_limit);
+ 
+ fail:
+ 	/*
+@@ -1549,6 +1825,13 @@ fail:
+ 	 * here that causes some holes skipped.
+ 	 */
+ 	if (start_addr != mm->mmap_base) {
++		mm->mmap_base = TASK_UNMAPPED_BASE;
++
++#ifdef CONFIG_PAX_RANDMMAP
++	if (mm->pax_flags & MF_PAX_RANDMMAP)
++		mm->mmap_base += mm->delta_mmap;
++#endif
++
+ 		mm->free_area_cache = mm->mmap_base;
+ 		mm->cached_hole_size = 0;
+ 		goto try_again;
+@@ -1561,12 +1844,14 @@ fail:
+ 	 * allocations.
+ 	 */
+ 	mm->cached_hole_size = ~0UL;
+-  	mm->free_area_cache = TASK_UNMAPPED_BASE;
++  	//mm->free_area_cache = TASK_UNMAPPED_BASE;
++	mm->free_area_cache = mm->mmap_base;
+ 	addr = arch_get_unmapped_area(filp, addr0, len, pgoff, flags);
+ 	/*
+ 	 * Restore the topdown base:
+ 	 */
+-	mm->free_area_cache = mm->mmap_base;
++	mm->mmap_base = base;
++	mm->free_area_cache = base;
+ 	mm->cached_hole_size = ~0UL;
+ 
+ 	return addr;
+@@ -1575,6 +1860,12 @@ fail:
+ 
+ void arch_unmap_area_topdown(struct mm_struct *mm, unsigned long addr)
+ {
++
++#ifdef CONFIG_PAX_SEGMEXEC
++	if ((mm->pax_flags & MF_PAX_SEGMEXEC) && SEGMEXEC_TASK_SIZE <= addr)
++		return;
++#endif
++
+ 	/*
+ 	 * Is this a new hole at the highest possible address?
+ 	 */
+@@ -1582,8 +1873,10 @@ void arch_unmap_area_topdown(struct mm_struct *mm, unsigned long addr)
+ 		mm->free_area_cache = addr;
+ 
+ 	/* dont allow allocations above current base */
+-	if (mm->free_area_cache > mm->mmap_base)
++	if (mm->free_area_cache > mm->mmap_base) {
+ 		mm->free_area_cache = mm->mmap_base;
++		mm->cached_hole_size = ~0UL;
++	}
+ }
+ 
+ unsigned long
+@@ -1679,6 +1972,28 @@ find_vma_prev(struct mm_struct *mm, unsigned long addr,
+ 	return vma;
+ }
+ 
++#ifdef CONFIG_PAX_SEGMEXEC
++struct vm_area_struct *pax_find_mirror_vma(struct vm_area_struct *vma)
++{
++        struct vm_area_struct *vma_m;
++
++        BUG_ON(!vma || vma->vm_start >= vma->vm_end);
++        if (!(vma->vm_mm->pax_flags & MF_PAX_SEGMEXEC) || !(vma->vm_flags & VM_EXEC)) {
++                BUG_ON(vma->vm_mirror);
++                return NULL;
++        }
++        BUG_ON(vma->vm_start < SEGMEXEC_TASK_SIZE && SEGMEXEC_TASK_SIZE < vma->vm_end);
++        vma_m = vma->vm_mirror;
++        BUG_ON(!vma_m || vma_m->vm_mirror != vma);
++        BUG_ON(vma->vm_file != vma_m->vm_file);
++        BUG_ON(vma->vm_end - vma->vm_start != vma_m->vm_end - vma_m->vm_start);
++        BUG_ON(vma->vm_pgoff != vma_m->vm_pgoff);
++        BUG_ON(vma->anon_vma != vma_m->anon_vma && vma->anon_vma->root != vma_m->anon_vma->root);
++        BUG_ON((vma->vm_flags ^ vma_m->vm_flags) & ~(VM_WRITE | VM_MAYWRITE | VM_ACCOUNT | VM_LOCKED | VM_RESERVED));
++        return vma_m;
++}
++#endif
++
+ /*
+  * Verify that the stack growth is acceptable and
+  * update accounting. This is shared with both the
+@@ -1695,6 +2010,7 @@ static int acct_stack_growth(struct vm_area_struct *vma, unsigned long size, uns
+ 		return -ENOMEM;
+ 
+ 	/* Stack limit test */
++	gr_learn_resource(current, RLIMIT_STACK, size, 1);
+ 	if (size > ACCESS_ONCE(rlim[RLIMIT_STACK].rlim_cur))
+ 		return -ENOMEM;
+ 
+@@ -1705,6 +2021,7 @@ static int acct_stack_growth(struct vm_area_struct *vma, unsigned long size, uns
+ 		locked = mm->locked_vm + grow;
+ 		limit = ACCESS_ONCE(rlim[RLIMIT_MEMLOCK].rlim_cur);
+ 		limit >>= PAGE_SHIFT;
++		gr_learn_resource(current, RLIMIT_MEMLOCK, locked << PAGE_SHIFT, 1);
+ 		if (locked > limit && !capable(CAP_IPC_LOCK))
+ 			return -ENOMEM;
+ 	}
+@@ -1723,7 +2040,6 @@ static int acct_stack_growth(struct vm_area_struct *vma, unsigned long size, uns
+ 		return -ENOMEM;
+ 
+ 	/* Ok, everything looks good - let it rip */
+-	mm->total_vm += grow;
+ 	if (vma->vm_flags & VM_LOCKED)
+ 		mm->locked_vm += grow;
+ 	vm_stat_account(mm, vma->vm_flags, vma->vm_file, grow);
+@@ -1735,37 +2051,49 @@ static int acct_stack_growth(struct vm_area_struct *vma, unsigned long size, uns
+  * PA-RISC uses this for its stack; IA64 for its Register Backing Store.
+  * vma is the last one with address > vma->vm_end.  Have to extend vma.
+  */
++#ifndef CONFIG_IA64
++static
++#endif
+ int expand_upwards(struct vm_area_struct *vma, unsigned long address)
+ {
+ 	int error;
++	bool locknext;
+ 
+ 	if (!(vma->vm_flags & VM_GROWSUP))
+ 		return -EFAULT;
+ 
++	/* Also guard against wrapping around to address 0. */
++	if (address < PAGE_ALIGN(address+1))
++		address = PAGE_ALIGN(address+1);
++	else
++		return -ENOMEM;
++
+ 	/*
+ 	 * We must make sure the anon_vma is allocated
+ 	 * so that the anon_vma locking is not a noop.
+ 	 */
+ 	if (unlikely(anon_vma_prepare(vma)))
+ 		return -ENOMEM;
++	locknext = vma->vm_next && (vma->vm_next->vm_flags & VM_GROWSDOWN);
++	if (locknext && anon_vma_prepare(vma->vm_next))
++		return -ENOMEM;
++
+ 	vma_lock_anon_vma(vma);
++	if (locknext)
++		vma_lock_anon_vma(vma->vm_next);
+ 
+ 	/*
+ 	 * vma->vm_start/vm_end cannot change under us because the caller
+ 	 * is required to hold the mmap_sem in read mode.  We need the
+-	 * anon_vma lock to serialize against concurrent expand_stacks.
+-	 * Also guard against wrapping around to address 0.
+-	 */
+-	if (address < PAGE_ALIGN(address+4))
+-		address = PAGE_ALIGN(address+4);
+-	else {
+-		vma_unlock_anon_vma(vma);
+-		return -ENOMEM;
+-	}
++	 * anon_vma locks to serialize against concurrent expand_stacks
++	 * and expand_upwards.
++	*/
+ 	error = 0;
+ 
+ 	/* Somebody else might have raced and expanded it already */
+-	if (address > vma->vm_end) {
++	if (vma->vm_next && (vma->vm_next->vm_flags & (VM_READ | VM_WRITE | VM_EXEC)) && vma->vm_next->vm_start - address < sysctl_heap_stack_gap)
++		error = -ENOMEM;
++	else if (address > vma->vm_end && (!locknext || vma->vm_next->vm_start >= address)) {
+ 		unsigned long size, grow;
+ 
+ 		size = address - vma->vm_start;
+@@ -1780,6 +2108,8 @@ int expand_upwards(struct vm_area_struct *vma, unsigned long address)
+ 			}
+ 		}
+ 	}
++	if (locknext)
++		vma_unlock_anon_vma(vma->vm_next);
+ 	vma_unlock_anon_vma(vma);
+ 	khugepaged_enter_vma_merge(vma);
+ 	return error;
+@@ -1793,6 +2123,8 @@ int expand_downwards(struct vm_area_struct *vma,
+ 				   unsigned long address)
+ {
+ 	int error;
++	bool lockprev = false;
++	struct vm_area_struct *prev;
+ 
+ 	/*
+ 	 * We must make sure the anon_vma is allocated
+@@ -1806,6 +2138,15 @@ int expand_downwards(struct vm_area_struct *vma,
+ 	if (error)
+ 		return error;
+ 
++	prev = vma->vm_prev;
++#if defined(CONFIG_STACK_GROWSUP) || defined(CONFIG_IA64)
++	lockprev = prev && (prev->vm_flags & VM_GROWSUP);
++#endif
++	if (lockprev && anon_vma_prepare(prev))
++		return -ENOMEM;
++	if (lockprev)
++		vma_lock_anon_vma(prev);
++
+ 	vma_lock_anon_vma(vma);
+ 
+ 	/*
+@@ -1815,9 +2156,17 @@ int expand_downwards(struct vm_area_struct *vma,
+ 	 */
+ 
+ 	/* Somebody else might have raced and expanded it already */
+-	if (address < vma->vm_start) {
++	if (prev && (prev->vm_flags & (VM_READ | VM_WRITE | VM_EXEC)) && address - prev->vm_end < sysctl_heap_stack_gap)
++		error = -ENOMEM;
++	else if (address < vma->vm_start && (!lockprev || prev->vm_end <= address)) {
+ 		unsigned long size, grow;
+ 
++#ifdef CONFIG_PAX_SEGMEXEC
++		struct vm_area_struct *vma_m;
++
++		vma_m = pax_find_mirror_vma(vma);
++#endif
++
+ 		size = vma->vm_end - address;
+ 		grow = (vma->vm_start - address) >> PAGE_SHIFT;
+ 
+@@ -1827,18 +2176,47 @@ int expand_downwards(struct vm_area_struct *vma,
+ 			if (!error) {
+ 				vma->vm_start = address;
+ 				vma->vm_pgoff -= grow;
++				track_exec_limit(vma->vm_mm, vma->vm_start, vma->vm_end, vma->vm_flags);
++
++#ifdef CONFIG_PAX_SEGMEXEC
++				if (vma_m) {
++					vma_m->vm_start -= grow << PAGE_SHIFT;
++					vma_m->vm_pgoff -= grow;
++				}
++#endif
+ 				perf_event_mmap(vma);
+ 			}
+ 		}
+ 	}
+ 	vma_unlock_anon_vma(vma);
++	if (lockprev)
++		vma_unlock_anon_vma(prev);
+ 	khugepaged_enter_vma_merge(vma);
+ 	return error;
+ }
+ 
++/*
++ * Note how expand_stack() refuses to expand the stack all the way to
++ * abut the next virtual mapping, *unless* that mapping itself is also
++ * a stack mapping. We want to leave room for a guard page, after all
++ * (the guard page itself is not added here, that is done by the
++ * actual page faulting logic)
++ *
++ * This matches the behavior of the guard page logic (see mm/memory.c:
++ * check_stack_guard_page()), which only allows the guard page to be
++ * removed under these circumstances.
++ */
+ #ifdef CONFIG_STACK_GROWSUP
+ int expand_stack(struct vm_area_struct *vma, unsigned long address)
+ {
++	struct vm_area_struct *next;
++
++	address &= PAGE_MASK;
++	next = vma->vm_next;
++	if (next && next->vm_start == address + PAGE_SIZE) {
++		if (!(next->vm_flags & VM_GROWSUP))
++			return -ENOMEM;
++	}
+ 	return expand_upwards(vma, address);
+ }
+ 
+@@ -1861,6 +2239,14 @@ find_extend_vma(struct mm_struct *mm, unsigned long addr)
+ #else
+ int expand_stack(struct vm_area_struct *vma, unsigned long address)
+ {
++	struct vm_area_struct *prev;
++
++	address &= PAGE_MASK;
++	prev = vma->vm_prev;
++	if (prev && prev->vm_end == address) {
++		if (!(prev->vm_flags & VM_GROWSDOWN))
++			return -ENOMEM;
++	}
+ 	return expand_downwards(vma, address);
+ }
+ 
+@@ -1901,7 +2287,13 @@ static void remove_vma_list(struct mm_struct *mm, struct vm_area_struct *vma)
+ 	do {
+ 		long nrpages = vma_pages(vma);
+ 
+-		mm->total_vm -= nrpages;
++#ifdef CONFIG_PAX_SEGMEXEC
++		if ((mm->pax_flags & MF_PAX_SEGMEXEC) && (vma->vm_start >= SEGMEXEC_TASK_SIZE)) {
++			vma = remove_vma(vma);
++			continue;
++		}
++#endif
++
+ 		vm_stat_account(mm, vma->vm_flags, vma->vm_file, -nrpages);
+ 		vma = remove_vma(vma);
+ 	} while (vma);
+@@ -1946,6 +2338,16 @@ detach_vmas_to_be_unmapped(struct mm_struct *mm, struct vm_area_struct *vma,
+ 	insertion_point = (prev ? &prev->vm_next : &mm->mmap);
+ 	vma->vm_prev = NULL;
+ 	do {
++
++#ifdef CONFIG_PAX_SEGMEXEC
++		if (vma->vm_mirror) {
++			BUG_ON(!vma->vm_mirror->vm_mirror || vma->vm_mirror->vm_mirror != vma);
++			vma->vm_mirror->vm_mirror = NULL;
++			vma->vm_mirror->vm_flags &= ~VM_EXEC;
++			vma->vm_mirror = NULL;
++		}
++#endif
++
+ 		rb_erase(&vma->vm_rb, &mm->mm_rb);
+ 		mm->map_count--;
+ 		tail_vma = vma;
+@@ -1974,14 +2376,33 @@ static int __split_vma(struct mm_struct * mm, struct vm_area_struct * vma,
+ 	struct vm_area_struct *new;
+ 	int err = -ENOMEM;
+ 
++#ifdef CONFIG_PAX_SEGMEXEC
++	struct vm_area_struct *vma_m, *new_m = NULL;
++	unsigned long addr_m = addr + SEGMEXEC_TASK_SIZE;
++#endif
++
+ 	if (is_vm_hugetlb_page(vma) && (addr &
+ 					~(huge_page_mask(hstate_vma(vma)))))
+ 		return -EINVAL;
+ 
++#ifdef CONFIG_PAX_SEGMEXEC
++	vma_m = pax_find_mirror_vma(vma);
++#endif
++
+ 	new = kmem_cache_alloc(vm_area_cachep, GFP_KERNEL);
+ 	if (!new)
+ 		goto out_err;
+ 
++#ifdef CONFIG_PAX_SEGMEXEC
++	if (vma_m) {
++		new_m = kmem_cache_alloc(vm_area_cachep, GFP_KERNEL);
++		if (!new_m) {
++			kmem_cache_free(vm_area_cachep, new);
++			goto out_err;
++		}
++	}
++#endif
++
+ 	/* most fields are the same, copy all, and then fixup */
+ 	*new = *vma;
+ 
+@@ -1994,6 +2415,22 @@ static int __split_vma(struct mm_struct * mm, struct vm_area_struct * vma,
+ 		new->vm_pgoff += ((addr - vma->vm_start) >> PAGE_SHIFT);
+ 	}
+ 
++#ifdef CONFIG_PAX_SEGMEXEC
++	if (vma_m) {
++		*new_m = *vma_m;
++		INIT_LIST_HEAD(&new_m->anon_vma_chain);
++		new_m->vm_mirror = new;
++		new->vm_mirror = new_m;
++
++		if (new_below)
++			new_m->vm_end = addr_m;
++		else {
++			new_m->vm_start = addr_m;
++			new_m->vm_pgoff += ((addr_m - vma_m->vm_start) >> PAGE_SHIFT);
++		}
++	}
++#endif
++
+ 	pol = mpol_dup(vma_policy(vma));
+ 	if (IS_ERR(pol)) {
+ 		err = PTR_ERR(pol);
+@@ -2019,6 +2456,42 @@ static int __split_vma(struct mm_struct * mm, struct vm_area_struct * vma,
+ 	else
+ 		err = vma_adjust(vma, vma->vm_start, addr, vma->vm_pgoff, new);
+ 
++#ifdef CONFIG_PAX_SEGMEXEC
++	if (!err && vma_m) {
++		if (anon_vma_clone(new_m, vma_m))
++			goto out_free_mpol;
++
++		mpol_get(pol);
++		vma_set_policy(new_m, pol);
++
++		if (new_m->vm_file) {
++			get_file(new_m->vm_file);
++			if (vma_m->vm_flags & VM_EXECUTABLE)
++				added_exe_file_vma(mm);
++		}
++
++		if (new_m->vm_ops && new_m->vm_ops->open)
++			new_m->vm_ops->open(new_m);
++
++		if (new_below)
++			err = vma_adjust(vma_m, addr_m, vma_m->vm_end, vma_m->vm_pgoff +
++				((addr_m - new_m->vm_start) >> PAGE_SHIFT), new_m);
++		else
++			err = vma_adjust(vma_m, vma_m->vm_start, addr_m, vma_m->vm_pgoff, new_m);
++
++		if (err) {
++			if (new_m->vm_ops && new_m->vm_ops->close)
++				new_m->vm_ops->close(new_m);
++			if (new_m->vm_file) {
++				if (vma_m->vm_flags & VM_EXECUTABLE)
++					removed_exe_file_vma(mm);
++				fput(new_m->vm_file);
++			}
++			mpol_put(pol);
++		}
++	}
++#endif
++
+ 	/* Success. */
+ 	if (!err)
+ 		return 0;
+@@ -2031,10 +2504,18 @@ static int __split_vma(struct mm_struct * mm, struct vm_area_struct * vma,
+ 			removed_exe_file_vma(mm);
+ 		fput(new->vm_file);
+ 	}
+-	unlink_anon_vmas(new);
+  out_free_mpol:
+ 	mpol_put(pol);
+  out_free_vma:
++
++#ifdef CONFIG_PAX_SEGMEXEC
++	if (new_m) {
++		unlink_anon_vmas(new_m);
++		kmem_cache_free(vm_area_cachep, new_m);
++	}
++#endif
++
++	unlink_anon_vmas(new);
+ 	kmem_cache_free(vm_area_cachep, new);
+  out_err:
+ 	return err;
+@@ -2047,6 +2528,15 @@ static int __split_vma(struct mm_struct * mm, struct vm_area_struct * vma,
+ int split_vma(struct mm_struct *mm, struct vm_area_struct *vma,
+ 	      unsigned long addr, int new_below)
+ {
++
++#ifdef CONFIG_PAX_SEGMEXEC
++	if (mm->pax_flags & MF_PAX_SEGMEXEC) {
++		BUG_ON(vma->vm_end > SEGMEXEC_TASK_SIZE);
++		if (mm->map_count >= sysctl_max_map_count-1)
++			return -ENOMEM;
++	} else
++#endif
++
+ 	if (mm->map_count >= sysctl_max_map_count)
+ 		return -ENOMEM;
+ 
+@@ -2058,11 +2548,30 @@ int split_vma(struct mm_struct *mm, struct vm_area_struct *vma,
+  * work.  This now handles partial unmappings.
+  * Jeremy Fitzhardinge <jeremy@goop.org>
+  */
++#ifdef CONFIG_PAX_SEGMEXEC
++int do_munmap(struct mm_struct *mm, unsigned long start, size_t len)
++{
++	int ret = __do_munmap(mm, start, len);
++	if (ret || !(mm->pax_flags & MF_PAX_SEGMEXEC))
++		return ret;
++
++	return __do_munmap(mm, start + SEGMEXEC_TASK_SIZE, len);
++}
++
++int __do_munmap(struct mm_struct *mm, unsigned long start, size_t len)
++#else
+ int do_munmap(struct mm_struct *mm, unsigned long start, size_t len)
++#endif
+ {
+ 	unsigned long end;
+ 	struct vm_area_struct *vma, *prev, *last;
+ 
++	/*
++	 * mm->mmap_sem is required to protect against another thread
++	 * changing the mappings in case we sleep.
++	 */
++	verify_mm_writelocked(mm);
++
+ 	if ((start & ~PAGE_MASK) || start > TASK_SIZE || len > TASK_SIZE-start)
+ 		return -EINVAL;
+ 
+@@ -2137,6 +2646,8 @@ int do_munmap(struct mm_struct *mm, unsigned long start, size_t len)
+ 	/* Fix up all other VM information */
+ 	remove_vma_list(mm, vma);
+ 
++	track_exec_limit(mm, start, end, 0UL);
++
+ 	return 0;
+ }
+ EXPORT_SYMBOL(do_munmap);
+@@ -2146,6 +2657,12 @@ int vm_munmap(unsigned long start, size_t len)
+ 	int ret;
+ 	struct mm_struct *mm = current->mm;
+ 
++#ifdef CONFIG_PAX_SEGMEXEC
++        if ((mm->pax_flags & MF_PAX_SEGMEXEC) &&
++            (len > SEGMEXEC_TASK_SIZE || addr > SEGMEXEC_TASK_SIZE-len))
++                return -EINVAL;
++#endif
++
+ 	down_write(&mm->mmap_sem);
+ 	ret = do_munmap(mm, start, len);
+ 	up_write(&mm->mmap_sem);
+@@ -2159,15 +2676,6 @@ SYSCALL_DEFINE2(munmap, unsigned long, addr, size_t, len)
+ 	return vm_munmap(addr, len);
+ }
+ 
+-static inline void verify_mm_writelocked(struct mm_struct *mm)
+-{
+-#ifdef CONFIG_DEBUG_VM
+-	if (unlikely(down_read_trylock(&mm->mmap_sem))) {
+-		WARN_ON(1);
+-		up_read(&mm->mmap_sem);
+-	}
+-#endif
+-}
+ 
+ /*
+  *  this is really a simplified "do_mmap".  it only handles
+@@ -2182,6 +2690,7 @@ static unsigned long do_brk(unsigned long addr, unsigned long len)
+ 	struct rb_node ** rb_link, * rb_parent;
+ 	pgoff_t pgoff = addr >> PAGE_SHIFT;
+ 	int error;
++	unsigned long charged;
+ 
+ 	len = PAGE_ALIGN(len);
+ 	if (!len)
+@@ -2193,16 +2702,30 @@ static unsigned long do_brk(unsigned long addr, unsigned long len)
+ 
+ 	flags = VM_DATA_DEFAULT_FLAGS | VM_ACCOUNT | mm->def_flags;
+ 
++#if defined(CONFIG_PAX_PAGEEXEC) || defined(CONFIG_PAX_SEGMEXEC)
++	if (mm->pax_flags & (MF_PAX_PAGEEXEC | MF_PAX_SEGMEXEC)) {
++		flags &= ~VM_EXEC;
++
++#ifdef CONFIG_PAX_MPROTECT
++		if (mm->pax_flags & MF_PAX_MPROTECT)
++			flags &= ~VM_MAYEXEC;
++#endif
++
++	}
++#endif
++
+ 	error = get_unmapped_area(NULL, addr, len, 0, MAP_FIXED);
+ 	if (error & ~PAGE_MASK)
+ 		return error;
+ 
++	charged = len >> PAGE_SHIFT;
++
+ 	/*
+ 	 * mlock MCL_FUTURE?
+ 	 */
+ 	if (mm->def_flags & VM_LOCKED) {
+ 		unsigned long locked, lock_limit;
+-		locked = len >> PAGE_SHIFT;
++		locked = charged;
+ 		locked += mm->locked_vm;
+ 		lock_limit = rlimit(RLIMIT_MEMLOCK);
+ 		lock_limit >>= PAGE_SHIFT;
+@@ -2219,22 +2742,22 @@ static unsigned long do_brk(unsigned long addr, unsigned long len)
+ 	/*
+ 	 * Clear old maps.  this also does some error checking for us
+ 	 */
+- munmap_back:
+ 	vma = find_vma_prepare(mm, addr, &prev, &rb_link, &rb_parent);
+ 	if (vma && vma->vm_start < addr + len) {
+ 		if (do_munmap(mm, addr, len))
+ 			return -ENOMEM;
+-		goto munmap_back;
++		vma = find_vma_prepare(mm, addr, &prev, &rb_link, &rb_parent);
++		BUG_ON(vma && vma->vm_start < addr + len);
+ 	}
+ 
+ 	/* Check against address space limits *after* clearing old maps... */
+-	if (!may_expand_vm(mm, len >> PAGE_SHIFT))
++	if (!may_expand_vm(mm, charged))
+ 		return -ENOMEM;
+ 
+ 	if (mm->map_count > sysctl_max_map_count)
+ 		return -ENOMEM;
+ 
+-	if (security_vm_enough_memory_mm(mm, len >> PAGE_SHIFT))
++	if (security_vm_enough_memory(charged))
+ 		return -ENOMEM;
+ 
+ 	/* Can we just expand an old private anonymous mapping? */
+@@ -2248,7 +2771,7 @@ static unsigned long do_brk(unsigned long addr, unsigned long len)
+ 	 */
+ 	vma = kmem_cache_zalloc(vm_area_cachep, GFP_KERNEL);
+ 	if (!vma) {
+-		vm_unacct_memory(len >> PAGE_SHIFT);
++		vm_unacct_memory(charged);
+ 		return -ENOMEM;
+ 	}
+ 
+@@ -2262,11 +2785,12 @@ static unsigned long do_brk(unsigned long addr, unsigned long len)
+ 	vma_link(mm, vma, prev, rb_link, rb_parent);
+ out:
+ 	perf_event_mmap(vma);
+-	mm->total_vm += len >> PAGE_SHIFT;
++	mm->total_vm += charged;
+ 	if (flags & VM_LOCKED) {
+ 		if (!mlock_vma_pages_range(vma, addr, addr + len))
+-			mm->locked_vm += (len >> PAGE_SHIFT);
++			mm->locked_vm += charged;
+ 	}
++	track_exec_limit(mm, addr, addr + len, flags);
+ 	return addr;
+ }
+ 
+@@ -2322,8 +2846,10 @@ void exit_mmap(struct mm_struct *mm)
+ 	 * Walk the list again, actually closing and freeing it,
+ 	 * with preemption enabled, without holding any MM locks.
+ 	 */
+-	while (vma)
++	while (vma) {
++		vma->vm_mirror = NULL;
+ 		vma = remove_vma(vma);
++	}
+ 
+ 	BUG_ON(mm->nr_ptes > (FIRST_USER_ADDRESS+PMD_SIZE-1)>>PMD_SHIFT);
+ }
+@@ -2337,6 +2863,13 @@ int insert_vm_struct(struct mm_struct * mm, struct vm_area_struct * vma)
+ 	struct vm_area_struct * __vma, * prev;
+ 	struct rb_node ** rb_link, * rb_parent;
+ 
++#ifdef CONFIG_PAX_SEGMEXEC
++	struct vm_area_struct *vma_m = NULL;
++#endif
++
++	if (security_file_mmap(NULL, 0, 0, 0, vma->vm_start, 1))
++		return -EPERM;
++
+ 	/*
+ 	 * The vm_pgoff of a purely anonymous vma should be irrelevant
+ 	 * until its first write fault, when page's anon_vma and index
+@@ -2359,7 +2892,22 @@ int insert_vm_struct(struct mm_struct * mm, struct vm_area_struct * vma)
+ 	if ((vma->vm_flags & VM_ACCOUNT) &&
+ 	     security_vm_enough_memory_mm(mm, vma_pages(vma)))
+ 		return -ENOMEM;
++
++#ifdef CONFIG_PAX_SEGMEXEC
++	if ((mm->pax_flags & MF_PAX_SEGMEXEC) && (vma->vm_flags & VM_EXEC)) {
++		vma_m = kmem_cache_zalloc(vm_area_cachep, GFP_KERNEL);
++		if (!vma_m)
++			return -ENOMEM;
++	}
++#endif
++
+ 	vma_link(mm, vma, prev, rb_link, rb_parent);
++
++#ifdef CONFIG_PAX_SEGMEXEC
++	if (vma_m)
++		BUG_ON(pax_mirror_vma(vma_m, vma));
++#endif
++
+ 	return 0;
+ }
+ 
+@@ -2378,6 +2926,8 @@ struct vm_area_struct *copy_vma(struct vm_area_struct **vmap,
+ 	struct mempolicy *pol;
+ 	bool faulted_in_anon_vma = true;
+ 
++	BUG_ON(vma->vm_mirror);
++
+ 	/*
+ 	 * If anonymous vma has not yet been faulted, update new pgoff
+ 	 * to match new location, to increase its chance of merging.
+@@ -2446,6 +2996,39 @@ struct vm_area_struct *copy_vma(struct vm_area_struct **vmap,
+ 	return NULL;
+ }
+ 
++#ifdef CONFIG_PAX_SEGMEXEC
++long pax_mirror_vma(struct vm_area_struct *vma_m, struct vm_area_struct *vma)
++{
++	struct vm_area_struct *prev_m;
++	struct rb_node **rb_link_m, *rb_parent_m;
++	struct mempolicy *pol_m;
++
++	BUG_ON(!(vma->vm_mm->pax_flags & MF_PAX_SEGMEXEC) || !(vma->vm_flags & VM_EXEC));
++	BUG_ON(vma->vm_mirror || vma_m->vm_mirror);
++	BUG_ON(!mpol_equal(vma_policy(vma), vma_policy(vma_m)));
++	*vma_m = *vma;
++	INIT_LIST_HEAD(&vma_m->anon_vma_chain);
++	if (anon_vma_clone(vma_m, vma))
++		return -ENOMEM;
++	pol_m = vma_policy(vma_m);
++	mpol_get(pol_m);
++	vma_set_policy(vma_m, pol_m);
++	vma_m->vm_start += SEGMEXEC_TASK_SIZE;
++	vma_m->vm_end += SEGMEXEC_TASK_SIZE;
++	vma_m->vm_flags &= ~(VM_WRITE | VM_MAYWRITE | VM_ACCOUNT | VM_LOCKED);
++	vma_m->vm_page_prot = vm_get_page_prot(vma_m->vm_flags);
++	if (vma_m->vm_file)
++		get_file(vma_m->vm_file);
++	if (vma_m->vm_ops && vma_m->vm_ops->open)
++		vma_m->vm_ops->open(vma_m);
++	find_vma_prepare(vma->vm_mm, vma_m->vm_start, &prev_m, &rb_link_m, &rb_parent_m);
++	vma_link(vma->vm_mm, vma_m, prev_m, rb_link_m, rb_parent_m);
++	vma_m->vm_mirror = vma;
++	vma->vm_mirror = vma_m;
++	return 0;
++}
++#endif
++
+ /*
+  * Return true if the calling process may expand its vm space by the passed
+  * number of pages
+@@ -2457,6 +3040,7 @@ int may_expand_vm(struct mm_struct *mm, unsigned long npages)
+ 
+ 	lim = rlimit(RLIMIT_AS) >> PAGE_SHIFT;
+ 
++	gr_learn_resource(current, RLIMIT_AS, (cur + npages) << PAGE_SHIFT, 1);
+ 	if (cur + npages > lim)
+ 		return 0;
+ 	return 1;
+@@ -2527,6 +3111,22 @@ int install_special_mapping(struct mm_struct *mm,
+ 	vma->vm_start = addr;
+ 	vma->vm_end = addr + len;
+ 
++#ifdef CONFIG_PAX_MPROTECT
++	if (mm->pax_flags & MF_PAX_MPROTECT) {
++#ifndef CONFIG_PAX_MPROTECT_COMPAT
++		if ((vm_flags & (VM_WRITE | VM_EXEC)) == (VM_WRITE | VM_EXEC))
++			return -EPERM;
++		if (!(vm_flags & VM_EXEC))
++			vm_flags &= ~VM_MAYEXEC;
++#else
++		if ((vm_flags & (VM_WRITE | VM_EXEC)) != VM_EXEC)
++			vm_flags &= ~(VM_EXEC | VM_MAYEXEC);
++#endif
++		else
++			vm_flags &= ~VM_MAYWRITE;
++	}
++#endif
++
+ 	vma->vm_flags = vm_flags | mm->def_flags | VM_DONTEXPAND;
+ 	vma->vm_page_prot = vm_get_page_prot(vma->vm_flags);
  
 diff --git a/mm/mmu_context.c b/mm/mmu_context.c
 index 3dcfaf4..d394b3f 100644
@@ -25326,10 +27640,24 @@ index e4fbfd6..6a6ac94 100644
  
  	return err;
 diff --git a/net/core/dev.c b/net/core/dev.c
-index 70145dc..aa3e8e5 100644
+index 70145dc..0f98f21 100644
 --- a/net/core/dev.c
 +++ b/net/core/dev.c
-@@ -1603,7 +1603,7 @@ int dev_forward_skb(struct net_device *dev, struct sk_buff *skb)
+@@ -1136,9 +1136,13 @@ void dev_load(struct net *net, const char *name)
+ 	if (no_module && capable(CAP_NET_ADMIN))
+ 		no_module = request_module("netdev-%s", name);
+ 	if (no_module && capable(CAP_SYS_MODULE)) {
++#ifdef CONFIG_GRKERNSEC_MODHARDEN
++               ___request_module(true, "grsec_modharden_netdev", "%s", name);
++#else
+ 		if (!request_module("%s", name))
+ 			pr_err("Loading kernel module for a network device with CAP_SYS_MODULE (deprecated).  Use CAP_NET_ADMIN and alias netdev-%s instead.\n",
+ 			       name);
++#endif
+ 	}
+ }
+ EXPORT_SYMBOL(dev_load);
+@@ -1603,7 +1607,7 @@ int dev_forward_skb(struct net_device *dev, struct sk_buff *skb)
  {
  	if (skb_shinfo(skb)->tx_flags & SKBTX_DEV_ZEROCOPY) {
  		if (skb_copy_ubufs(skb, GFP_ATOMIC)) {
@@ -25338,7 +27666,7 @@ index 70145dc..aa3e8e5 100644
  			kfree_skb(skb);
  			return NET_RX_DROP;
  		}
-@@ -1613,7 +1613,7 @@ int dev_forward_skb(struct net_device *dev, struct sk_buff *skb)
+@@ -1613,7 +1617,7 @@ int dev_forward_skb(struct net_device *dev, struct sk_buff *skb)
  	nf_reset(skb);
  
  	if (unlikely(!is_skb_forwardable(dev, skb))) {
@@ -25347,7 +27675,7 @@ index 70145dc..aa3e8e5 100644
  		kfree_skb(skb);
  		return NET_RX_DROP;
  	}
-@@ -2043,7 +2043,7 @@ static int illegal_highdma(struct net_device *dev, struct sk_buff *skb)
+@@ -2043,7 +2047,7 @@ static int illegal_highdma(struct net_device *dev, struct sk_buff *skb)
  
  struct dev_gso_cb {
  	void (*destructor)(struct sk_buff *skb);
@@ -25356,7 +27684,7 @@ index 70145dc..aa3e8e5 100644
  
  #define DEV_GSO_CB(skb) ((struct dev_gso_cb *)(skb)->cb)
  
-@@ -2899,7 +2899,7 @@ enqueue:
+@@ -2899,7 +2903,7 @@ enqueue:
  
  	local_irq_restore(flags);
  
@@ -25365,7 +27693,7 @@ index 70145dc..aa3e8e5 100644
  	kfree_skb(skb);
  	return NET_RX_DROP;
  }
-@@ -2971,7 +2971,7 @@ int netif_rx_ni(struct sk_buff *skb)
+@@ -2971,7 +2975,7 @@ int netif_rx_ni(struct sk_buff *skb)
  }
  EXPORT_SYMBOL(netif_rx_ni);
  
@@ -25374,7 +27702,7 @@ index 70145dc..aa3e8e5 100644
  {
  	struct softnet_data *sd = &__get_cpu_var(softnet_data);
  
-@@ -3259,7 +3259,7 @@ ncls:
+@@ -3259,7 +3263,7 @@ ncls:
  	if (pt_prev) {
  		ret = pt_prev->func(skb, skb->dev, pt_prev, orig_dev);
  	} else {
@@ -25383,7 +27711,7 @@ index 70145dc..aa3e8e5 100644
  		kfree_skb(skb);
  		/* Jamal, now you will not able to escape explaining
  		 * me how you were going to use this. :-)
-@@ -3819,7 +3819,7 @@ void netif_napi_del(struct napi_struct *napi)
+@@ -3819,7 +3823,7 @@ void netif_napi_del(struct napi_struct *napi)
  }
  EXPORT_SYMBOL(netif_napi_del);
  
@@ -25392,7 +27720,7 @@ index 70145dc..aa3e8e5 100644
  {
  	struct softnet_data *sd = &__get_cpu_var(softnet_data);
  	unsigned long time_limit = jiffies + 2;
-@@ -4097,7 +4097,13 @@ static void dev_seq_printf_stats(struct seq_file *seq, struct net_device *dev)
+@@ -4097,7 +4101,13 @@ static void dev_seq_printf_stats(struct seq_file *seq, struct net_device *dev)
  	struct rtnl_link_stats64 temp;
  	const struct rtnl_link_stats64 *stats = dev_get_stats(dev, &temp);
  
@@ -25407,7 +27735,7 @@ index 70145dc..aa3e8e5 100644
  		   "%8llu %7llu %4llu %4llu %4llu %5llu %7llu %10llu\n",
  		   dev->name, stats->rx_bytes, stats->rx_packets,
  		   stats->rx_errors,
-@@ -4172,7 +4178,7 @@ static int softnet_seq_show(struct seq_file *seq, void *v)
+@@ -4172,7 +4182,7 @@ static int softnet_seq_show(struct seq_file *seq, void *v)
  	return 0;
  }
  
@@ -25416,7 +27744,7 @@ index 70145dc..aa3e8e5 100644
  	.start = dev_seq_start,
  	.next  = dev_seq_next,
  	.stop  = dev_seq_stop,
-@@ -4202,7 +4208,7 @@ static const struct seq_operations softnet_seq_ops = {
+@@ -4202,7 +4212,7 @@ static const struct seq_operations softnet_seq_ops = {
  
  static int softnet_seq_open(struct inode *inode, struct file *file)
  {
@@ -25425,7 +27753,7 @@ index 70145dc..aa3e8e5 100644
  }
  
  static const struct file_operations softnet_seq_fops = {
-@@ -4289,8 +4295,13 @@ static int ptype_seq_show(struct seq_file *seq, void *v)
+@@ -4289,8 +4299,13 @@ static int ptype_seq_show(struct seq_file *seq, void *v)
  		else
  			seq_printf(seq, "%04x", ntohs(pt->type));
  
@@ -25439,7 +27767,7 @@ index 70145dc..aa3e8e5 100644
  	}
  
  	return 0;
-@@ -4352,7 +4363,7 @@ static void __net_exit dev_proc_net_exit(struct net *net)
+@@ -4352,7 +4367,7 @@ static void __net_exit dev_proc_net_exit(struct net *net)
  	proc_net_remove(net, "dev");
  }
  
@@ -25448,7 +27776,7 @@ index 70145dc..aa3e8e5 100644
  	.init = dev_proc_net_init,
  	.exit = dev_proc_net_exit,
  };
-@@ -5842,7 +5853,7 @@ struct rtnl_link_stats64 *dev_get_stats(struct net_device *dev,
+@@ -5842,7 +5857,7 @@ struct rtnl_link_stats64 *dev_get_stats(struct net_device *dev,
  	} else {
  		netdev_stats_to_stats64(storage, &dev->stats);
  	}
@@ -25457,7 +27785,7 @@ index 70145dc..aa3e8e5 100644
  	return storage;
  }
  EXPORT_SYMBOL(dev_get_stats);
-@@ -6414,7 +6425,7 @@ static void __net_exit netdev_exit(struct net *net)
+@@ -6414,7 +6429,7 @@ static void __net_exit netdev_exit(struct net *net)
  	kfree(net->dev_index_head);
  }
  
@@ -25466,7 +27794,7 @@ index 70145dc..aa3e8e5 100644
  	.init = netdev_init,
  	.exit = netdev_exit,
  };
-@@ -6476,7 +6487,7 @@ static void __net_exit default_device_exit_batch(struct list_head *net_list)
+@@ -6476,7 +6491,7 @@ static void __net_exit default_device_exit_batch(struct list_head *net_list)
  	rtnl_unlock();
  }
  
@@ -26701,6 +29029,123 @@ index b5b563d..ba7aa81 100644
  	.init = raw_init_net,
  	.exit = raw_exit_net,
  };
+diff --git a/net/ipv4/route.c b/net/ipv4/route.c
+index 3097eca..bc86798 100644
+--- a/net/ipv4/route.c
++++ b/net/ipv4/route.c
+@@ -312,7 +312,7 @@ static inline unsigned int rt_hash(__be32 daddr, __be32 saddr, int idx,
+ 
+ static inline int rt_genid(struct net *net)
+ {
+-	return atomic_read(&net->ipv4.rt_genid);
++	return atomic_read_unchecked(&net->ipv4.rt_genid);
+ }
+ 
+ #ifdef CONFIG_PROC_FS
+@@ -550,7 +550,7 @@ static const struct seq_operations rt_cpu_seq_ops = {
+ 
+ static int rt_cpu_seq_open(struct inode *inode, struct file *file)
+ {
+-	return seq_open(file, &rt_cpu_seq_ops);
++	return seq_open_restrict(file, &rt_cpu_seq_ops);
+ }
+ 
+ static const struct file_operations rt_cpu_seq_fops = {
+@@ -588,7 +588,7 @@ static int rt_acct_proc_show(struct seq_file *m, void *v)
+ 
+ static int rt_acct_proc_open(struct inode *inode, struct file *file)
+ {
+-	return single_open(file, rt_acct_proc_show, NULL);
++	return single_open_restrict(file, rt_acct_proc_show, NULL);
+ }
+ 
+ static const struct file_operations rt_acct_proc_fops = {
+@@ -640,7 +640,7 @@ static void __net_exit ip_rt_do_proc_exit(struct net *net)
+ #endif
+ }
+ 
+-static struct pernet_operations ip_rt_proc_ops __net_initdata =  {
++static struct pernet_operations ip_rt_proc_ops __net_initconst =  {
+ 	.init = ip_rt_do_proc_init,
+ 	.exit = ip_rt_do_proc_exit,
+ };
+@@ -937,7 +937,7 @@ static void rt_cache_invalidate(struct net *net)
+ 	unsigned char shuffle;
+ 
+ 	get_random_bytes(&shuffle, sizeof(shuffle));
+-	atomic_add(shuffle + 1U, &net->ipv4.rt_genid);
++	atomic_add_unchecked(shuffle + 1U, &net->ipv4.rt_genid);
+ 	inetpeer_invalidate_tree(AF_INET);
+ }
+ 
+@@ -3220,7 +3220,7 @@ static int ipv4_sysctl_rtcache_flush(ctl_table *__ctl, int write,
+ {
+ 	if (write) {
+ 		int flush_delay;
+-		ctl_table ctl;
++		ctl_table_no_const ctl;
+ 		struct net *net;
+ 
+ 		memcpy(&ctl, __ctl, sizeof(ctl));
+@@ -3369,6 +3369,7 @@ static struct ctl_table ipv4_route_flush_table[] = {
+ 		.maxlen		= sizeof(int),
+ 		.mode		= 0200,
+ 		.proc_handler	= ipv4_sysctl_rtcache_flush,
++		.extral		= &init_net,
+ 	},
+ 	{ },
+ };
+@@ -3382,25 +3383,23 @@ static __net_initdata struct ctl_path ipv4_route_path[] = {
+ 
+ static __net_init int sysctl_route_net_init(struct net *net)
+ {
+-	struct ctl_table *tbl;
++	ctl_table_no_const *tbl = NULL;
+ 
+-	tbl = ipv4_route_flush_table;
+ 	if (!net_eq(net, &init_net)) {
+-		tbl = kmemdup(tbl, sizeof(ipv4_route_flush_table), GFP_KERNEL);
++		tbl = kmemdup(ipv4_route_flush_table, sizeof(ipv4_route_flush_table), GFP_KERNEL);
+ 		if (tbl == NULL)
+ 			goto err_dup;
+-	}
+-	tbl[0].extra1 = net;
+ 
+-	net->ipv4.route_hdr =
+-		register_net_sysctl_table(net, ipv4_route_path, tbl);
++               net->ipv4.route_hdr = register_net_sysctl_table(net, ipv4_route_path, tbl);
++       } else
++               net->ipv4.route_hdr = register_net_sysctl_table(net, ipv4_route_path, ipv4_route_flush_table);
++
+ 	if (net->ipv4.route_hdr == NULL)
+ 		goto err_reg;
+ 	return 0;
+ 
+ err_reg:
+-	if (tbl != ipv4_route_flush_table)
+-		kfree(tbl);
++	kfree(tbl);
+ err_dup:
+ 	return -ENOMEM;
+ }
+@@ -3415,7 +3414,7 @@ static __net_exit void sysctl_route_net_exit(struct net *net)
+ 	kfree(tbl);
+ }
+ 
+-static __net_initdata struct pernet_operations sysctl_route_ops = {
++static __net_initconst struct pernet_operations sysctl_route_ops = {
+ 	.init = sysctl_route_net_init,
+ 	.exit = sysctl_route_net_exit,
+ };
+@@ -3430,7 +3429,7 @@ static __net_init int rt_genid_init(struct net *net)
+ 	return 0;
+ }
+ 
+-static __net_initdata struct pernet_operations rt_genid_ops = {
++static __net_initconst struct pernet_operations rt_genid_ops = {
+ 	.init = rt_genid_init,
+ };
+ 
 diff --git a/net/ipv4/syncookies.c b/net/ipv4/syncookies.c
 index b93b6d3..3c67892 100644
 --- a/net/ipv4/syncookies.c
@@ -26937,6 +29382,90 @@ index ac6051d..64ffc77 100644
  
  	hdr = register_sysctl_paths(net_ipv4_ctl_path, ipv4_table);
  	if (hdr == NULL)
+diff --git a/net/ipv4/tcp_input.c b/net/ipv4/tcp_input.c
+index 14a227e..e0e6183 100644
+--- a/net/ipv4/tcp_input.c
++++ b/net/ipv4/tcp_input.c
+@@ -4727,7 +4727,7 @@ static struct sk_buff *tcp_collapse_one(struct sock *sk, struct sk_buff *skb,
+  * simplifies code)
+  */
+ static void
+-tcp_collapse(struct sock *sk, struct sk_buff_head *list,
++__intentional_overflow(5,6) tcp_collapse(struct sock *sk, struct sk_buff_head *list,
+ 	     struct sk_buff *head, struct sk_buff *tail,
+ 	     u32 start, u32 end)
+ {
+@@ -5531,6 +5531,9 @@ slow_path:
+ 	if (len < (th->doff << 2) || tcp_checksum_complete_user(sk, skb))
+ 		goto csum_error;
+ 
++       if (!th->ack && !th->rst)
++               goto discard;
++
+ 	/*
+ 	 *	Standard slow path.
+ 	 */
+@@ -5540,7 +5543,7 @@ slow_path:
+ 		return -res;
+ 
+ step5:
+-	if (th->ack && tcp_ack(sk, skb, FLAG_SLOWPATH) < 0)
++	if (tcp_ack(sk, skb, FLAG_SLOWPATH | FLAG_UPDATE_TS_RECENT) < 0)
+ 		goto discard;
+ 
+ 	tcp_rcv_rtt_measure_ts(sk, skb);
+@@ -5771,6 +5774,7 @@ discard:
+ 	    tcp_paws_reject(&tp->rx_opt, 0))
+ 		goto discard_and_undo;
+ 
++#ifndef CONFIG_GRKERNSEC_NO_SIMULT_CONNECT
+ 	if (th->syn) {
+ 		/* We see SYN without ACK. It is attempt of
+ 		 * simultaneous connect with crossed SYNs.
+@@ -5819,6 +5823,7 @@ discard:
+ 		goto discard;
+ #endif
+ 	}
++#endif
+ 	/* "fifth, if neither of the SYN or RST bits is set then
+ 	 * drop the segment and return."
+ 	 */
+@@ -5863,7 +5868,7 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb,
+ 			goto discard;
+ 
+ 		if (th->syn) {
+-			if (th->fin)
++			if (th->fin || th->urg || th->psh)
+ 				goto discard;
+ 			if (icsk->icsk_af_ops->conn_request(sk, skb) < 0)
+ 				return 1;
+@@ -5902,12 +5907,15 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb,
+ 		return 0;
+ 	}
+ 
++       if (!th->ack && !th->rst)
++               goto discard;
++
+ 	res = tcp_validate_incoming(sk, skb, th, 0);
+ 	if (res <= 0)
+ 		return -res;
+ 
+ 	/* step 5: check the ACK field */
+-	if (th->ack) {
++	if (true) {
+ 		int acceptable = tcp_ack(sk, skb, FLAG_SLOWPATH) > 0;
+ 
+ 		switch (sk->sk_state) {
+@@ -6012,8 +6020,7 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb,
+ 			}
+ 			break;
+ 		}
+-	} else
+-		goto discard;
++	}
+ 
+ 	/* step 6: check the URG bit */
+ 	tcp_urg(sk, skb, th);
 diff --git a/net/ipv4/tcp_ipv4.c b/net/ipv4/tcp_ipv4.c
 index 4e90443..e38f7c5 100644
 --- a/net/ipv4/tcp_ipv4.c
@@ -29056,6 +31585,24 @@ index 190ad37..dbadf01 100644
  	opt[0] = TCPOPT_MSS;
  	opt[1] = TCPOLEN_MSS;
  	opt[2] = (newmss & 0xff00) >> 8;
+diff --git a/net/netfilter/xt_hashlimit.c b/net/netfilter/xt_hashlimit.c
+index d95f9c9..446b332 100644
+--- a/net/netfilter/xt_hashlimit.c
++++ b/net/netfilter/xt_hashlimit.c
+@@ -761,11 +761,11 @@ static int __net_init hashlimit_proc_net_init(struct net *net)
+ {
+ 	struct hashlimit_net *hashlimit_net = hashlimit_pernet(net);
+ 
+-	hashlimit_net->ipt_hashlimit = proc_mkdir("ipt_hashlimit", net->proc_net);
++	hashlimit_net->ipt_hashlimit = proc_mkdir_restrict("ipt_hashlimit", net->proc_net);
+ 	if (!hashlimit_net->ipt_hashlimit)
+ 		return -ENOMEM;
+ #if IS_ENABLED(CONFIG_IP6_NF_IPTABLES)
+-	hashlimit_net->ip6t_hashlimit = proc_mkdir("ip6t_hashlimit", net->proc_net);
++	hashlimit_net->ip6t_hashlimit = proc_mkdir_restrict("ip6t_hashlimit", net->proc_net);
+ 	if (!hashlimit_net->ip6t_hashlimit) {
+ 		proc_net_remove(net, "ipt_hashlimit");
+ 		return -ENOMEM;
 diff --git a/net/netfilter/xt_recent.c b/net/netfilter/xt_recent.c
 index d2ff15a..cdeb1f2 100644
 --- a/net/netfilter/xt_recent.c
@@ -30259,6 +32806,319 @@ index b026ba0..d5447ef 100644
  		tp->srtt = tp->srtt - (tp->srtt >> sctp_rto_alpha)
  			+ (rtt >> sctp_rto_alpha);
  	} else {
+diff --git a/net/socket.c b/net/socket.c
+index 851edcd..8294937 100644
+--- a/net/socket.c
++++ b/net/socket.c
+@@ -88,6 +88,7 @@
+ #include <linux/nsproxy.h>
+ #include <linux/magic.h>
+ #include <linux/slab.h>
++#include <linux/in.h>
+ 
+ #include <asm/uaccess.h>
+ #include <asm/unistd.h>
+@@ -105,6 +106,8 @@
+ #include <linux/sockios.h>
+ #include <linux/atalk.h>
+ 
++#include <linux/grsock.h>
++
+ static int sock_no_open(struct inode *irrelevant, struct file *dontcare);
+ static ssize_t sock_aio_read(struct kiocb *iocb, const struct iovec *iov,
+ 			 unsigned long nr_segs, loff_t pos);
+@@ -156,7 +159,7 @@ static const struct file_operations socket_file_ops = {
+  */
+ 
+ static DEFINE_SPINLOCK(net_family_lock);
+-static const struct net_proto_family __rcu *net_families[NPROTO] __read_mostly;
++const struct net_proto_family __rcu *net_families[NPROTO] __read_mostly;
+ 
+ /*
+  *	Statistics counters of the socket lists
+@@ -321,7 +324,7 @@ static struct dentry *sockfs_mount(struct file_system_type *fs_type,
+ 		&sockfs_dentry_operations, SOCKFS_MAGIC);
+ }
+ 
+-static struct vfsmount *sock_mnt __read_mostly;
++struct vfsmount *sock_mnt __read_mostly;
+ 
+ static struct file_system_type sock_fs_type = {
+ 	.name =		"sockfs",
+@@ -1207,6 +1210,8 @@ int __sock_create(struct net *net, int family, int type, int protocol,
+ 		return -EAFNOSUPPORT;
+ 	if (type < 0 || type >= SOCK_MAX)
+ 		return -EINVAL;
++       if (protocol < 0)
++               return -EINVAL;
+ 
+ 	/* Compatibility.
+ 
+@@ -1227,6 +1232,20 @@ int __sock_create(struct net *net, int family, int type, int protocol,
+ 	if (err)
+ 		return err;
+ 
++       if(!kern && !gr_search_socket(family, type, protocol)) {
++               if (rcu_access_pointer(net_families[family]) == NULL)
++                       return -EAFNOSUPPORT;
++               else
++                       return -EACCES;
++       }
++
++       if (!kern && gr_handle_sock_all(family, type, protocol)) {
++               if (rcu_access_pointer(net_families[family]) == NULL)
++                       return -EAFNOSUPPORT;
++               else
++                       return -EACCES;
++       }
++
+ 	/*
+ 	 *	Allocate the socket and allow the family to set things up. if
+ 	 *	the protocol is 0, the family is instructed to select an appropriate
+@@ -1451,6 +1470,13 @@ SYSCALL_DEFINE3(bind, int, fd, struct sockaddr __user *, umyaddr, int, addrlen)
+ 	if (sock) {
+ 		err = move_addr_to_kernel(umyaddr, addrlen, &address);
+ 		if (err >= 0) {
++                       if (gr_handle_sock_server((struct sockaddr *)&address)) {
++                               err = -EACCES;
++                               goto error;
++                       }
++                       err = gr_search_bind(sock, (struct sockaddr_in *)&address);
++                       if (err)
++                               goto error;
+ 			err = security_socket_bind(sock,
+ 						   (struct sockaddr *)&address,
+ 						   addrlen);
+@@ -1459,6 +1485,7 @@ SYSCALL_DEFINE3(bind, int, fd, struct sockaddr __user *, umyaddr, int, addrlen)
+ 						      (struct sockaddr *)
+ 						      &address, addrlen);
+ 		}
++error:
+ 		fput_light(sock->file, fput_needed);
+ 	}
+ 	return err;
+@@ -1482,10 +1509,20 @@ SYSCALL_DEFINE2(listen, int, fd, int, backlog)
+ 		if ((unsigned)backlog > somaxconn)
+ 			backlog = somaxconn;
+ 
++               if (gr_handle_sock_server_other(sock->sk)) {
++                       err = -EPERM;
++                       goto error;
++               }
++
++               err = gr_search_listen(sock);
++               if (err)
++                       goto error;
++
+ 		err = security_socket_listen(sock, backlog);
+ 		if (!err)
+ 			err = sock->ops->listen(sock, backlog);
+ 
++error:
+ 		fput_light(sock->file, fput_needed);
+ 	}
+ 	return err;
+@@ -1529,6 +1566,18 @@ SYSCALL_DEFINE4(accept4, int, fd, struct sockaddr __user *, upeer_sockaddr,
+ 	newsock->type = sock->type;
+ 	newsock->ops = sock->ops;
+ 
++       if (gr_handle_sock_server_other(sock->sk)) {
++               err = -EPERM;
++               sock_release(newsock);
++               goto out_put;
++       }
++
++       err = gr_search_accept(sock);
++       if (err) {
++               sock_release(newsock);
++               goto out_put;
++       }
++
+ 	/*
+ 	 * We don't need try_module_get here, as the listening socket (sock)
+ 	 * has the protocol module (sock->ops->owner) held.
+@@ -1567,6 +1616,8 @@ SYSCALL_DEFINE4(accept4, int, fd, struct sockaddr __user *, upeer_sockaddr,
+ 	fd_install(newfd, newfile);
+ 	err = newfd;
+ 
++	gr_attach_curr_ip(newsock->sk);
++
+ out_put:
+ 	fput_light(sock->file, fput_needed);
+ out:
+@@ -1599,6 +1650,7 @@ SYSCALL_DEFINE3(connect, int, fd, struct sockaddr __user *, uservaddr,
+ 		int, addrlen)
+ {
+ 	struct socket *sock;
++	struct sockaddr *sck;
+ 	struct sockaddr_storage address;
+ 	int err, fput_needed;
+ 
+@@ -1609,6 +1661,18 @@ SYSCALL_DEFINE3(connect, int, fd, struct sockaddr __user *, uservaddr,
+ 	if (err < 0)
+ 		goto out_put;
+ 
++       sck = (struct sockaddr *)&address;
++
++       if (gr_handle_sock_client(sck)) {
++               err = -EACCES;
++               goto out_put;
++       }
++
++       err = gr_search_connect(sock, (struct sockaddr_in *)sck);
++       if (err)
++               goto out_put;
++
++
+ 	err =
+ 	    security_socket_connect(sock, (struct sockaddr *)&address, addrlen);
+ 	if (err)
+@@ -1690,6 +1754,8 @@ SYSCALL_DEFINE3(getpeername, int, fd, struct sockaddr __user *, usockaddr,
+  *	the protocol.
+  */
+ 
++asmlinkage long sys_sendto(int, void __user *, size_t, unsigned, struct sockaddr __user *, int);
++
+ SYSCALL_DEFINE6(sendto, int, fd, void __user *, buff, size_t, len,
+ 		unsigned, flags, struct sockaddr __user *, addr,
+ 		int, addr_len)
+@@ -1756,7 +1822,7 @@ SYSCALL_DEFINE6(recvfrom, int, fd, void __user *, ubuf, size_t, size,
+ 	struct socket *sock;
+ 	struct iovec iov;
+ 	struct msghdr msg;
+-	struct sockaddr_storage address;
++	struct sockaddr_storage address = { };
+ 	int err, err2;
+ 	int fput_needed;
+ 
+@@ -1966,7 +2032,7 @@ static int __sys_sendmsg(struct socket *sock, struct msghdr __user *msg,
+ 		 * checking falls down on this.
+ 		 */
+ 		if (copy_from_user(ctl_buf,
+-				   (void __user __force *)msg_sys->msg_control,
++				(void __force_user *)msg_sys->msg_control,
+ 				   ctl_len))
+ 			goto out_freectl;
+ 		msg_sys->msg_control = ctl_buf;
+@@ -2106,7 +2172,7 @@ static int __sys_recvmsg(struct socket *sock, struct msghdr __user *msg,
+ 	int err, iov_size, total_len, len;
+ 
+ 	/* kernel mode address */
+-	struct sockaddr_storage addr;
++	struct sockaddr_storage addr = { };
+ 
+ 	/* user mode address pointers */
+ 	struct sockaddr __user *uaddr;
+@@ -2136,7 +2202,7 @@ static int __sys_recvmsg(struct socket *sock, struct msghdr __user *msg,
+ 	 *      kernel msghdr to use the kernel address space)
+ 	 */
+ 
+-	uaddr = (__force void __user *)msg_sys->msg_name;
++	uaddr = (void __force_user *)msg_sys->msg_name;
+ 	uaddr_len = COMPAT_NAMELEN(msg);
+ 	if (MSG_CMSG_COMPAT & flags) {
+ 		err = verify_compat_iovec(msg_sys, iov, &addr, VERIFY_WRITE);
+@@ -2758,9 +2824,9 @@ static int ethtool_ioctl(struct net *net, struct compat_ifreq __user *ifr32)
+ 	}
+ 
+ 	ifr = compat_alloc_user_space(buf_size);
+-	rxnfc = (void *)ifr + ALIGN(sizeof(struct ifreq), 8);
++	rxnfc = (void __user *)ifr + ALIGN(sizeof(struct ifreq), 8);
+ 
+-	if (copy_in_user(&ifr->ifr_name, &ifr32->ifr_name, IFNAMSIZ))
++	if (copy_in_user(ifr->ifr_name, ifr32->ifr_name, IFNAMSIZ))
+ 		return -EFAULT;
+ 
+ 	if (put_user(convert_in ? rxnfc : compat_ptr(data),
+@@ -2782,12 +2848,12 @@ static int ethtool_ioctl(struct net *net, struct compat_ifreq __user *ifr32)
+ 			offsetof(struct ethtool_rxnfc, fs.ring_cookie));
+ 
+ 		if (copy_in_user(rxnfc, compat_rxnfc,
+-				 (void *)(&rxnfc->fs.m_ext + 1) -
+-				 (void *)rxnfc) ||
++                                (void __user *)(&rxnfc->fs.m_ext + 1) -
++                                (void __user *)rxnfc) ||
+ 		    copy_in_user(&rxnfc->fs.ring_cookie,
+ 				 &compat_rxnfc->fs.ring_cookie,
+-				 (void *)(&rxnfc->fs.location + 1) -
+-				 (void *)&rxnfc->fs.ring_cookie) ||
++                                (void __user *)(&rxnfc->fs.location + 1) -
++                                (void __user *)&rxnfc->fs.ring_cookie) ||
+ 		    copy_in_user(&rxnfc->rule_cnt, &compat_rxnfc->rule_cnt,
+ 				 sizeof(rxnfc->rule_cnt)))
+ 			return -EFAULT;
+@@ -2799,12 +2865,12 @@ static int ethtool_ioctl(struct net *net, struct compat_ifreq __user *ifr32)
+ 
+ 	if (convert_out) {
+ 		if (copy_in_user(compat_rxnfc, rxnfc,
+-				 (const void *)(&rxnfc->fs.m_ext + 1) -
+-				 (const void *)rxnfc) ||
++				 (const void __user *)(&rxnfc->fs.m_ext + 1) -
++				 (const void __user *)rxnfc) ||
+ 		    copy_in_user(&compat_rxnfc->fs.ring_cookie,
+ 				 &rxnfc->fs.ring_cookie,
+-				 (const void *)(&rxnfc->fs.location + 1) -
+-				 (const void *)&rxnfc->fs.ring_cookie) ||
++				 (const void __user *)(&rxnfc->fs.location + 1) -
++				 (const void __user *)&rxnfc->fs.ring_cookie) ||
+ 		    copy_in_user(&compat_rxnfc->rule_cnt, &rxnfc->rule_cnt,
+ 				 sizeof(rxnfc->rule_cnt)))
+ 			return -EFAULT;
+@@ -2874,14 +2940,14 @@ static int bond_ioctl(struct net *net, unsigned int cmd,
+ 		old_fs = get_fs();
+ 		set_fs(KERNEL_DS);
+ 		err = dev_ioctl(net, cmd,
+-				(struct ifreq __user __force *) &kifr);
++				(struct ifreq __force_user *) &kifr);
+ 		set_fs(old_fs);
+ 
+ 		return err;
+ 	case SIOCBONDSLAVEINFOQUERY:
+ 	case SIOCBONDINFOQUERY:
+ 		uifr = compat_alloc_user_space(sizeof(*uifr));
+-		if (copy_in_user(&uifr->ifr_name, &ifr32->ifr_name, IFNAMSIZ))
++		if (copy_in_user(uifr->ifr_name, ifr32->ifr_name, IFNAMSIZ))
+ 			return -EFAULT;
+ 
+ 		if (get_user(data, &ifr32->ifr_ifru.ifru_data))
+@@ -2983,7 +3049,7 @@ static int compat_sioc_ifmap(struct net *net, unsigned int cmd,
+ 
+ 	old_fs = get_fs();
+ 	set_fs(KERNEL_DS);
+-	err = dev_ioctl(net, cmd, (void  __user __force *)&ifr);
++	err = dev_ioctl(net, cmd, (void __force_user *)&ifr);
+ 	set_fs(old_fs);
+ 
+ 	if (cmd == SIOCGIFMAP && !err) {
+@@ -3088,7 +3154,7 @@ static int routing_ioctl(struct net *net, struct socket *sock,
+ 		ret |= __get_user(rtdev, &(ur4->rt_dev));
+ 		if (rtdev) {
+ 			ret |= copy_from_user(devname, compat_ptr(rtdev), 15);
+-			r4.rt_dev = (char __user __force *)devname;
++			r4.rt_dev = (char __force_user *)devname;
+ 			devname[15] = 0;
+ 		} else
+ 			r4.rt_dev = NULL;
+@@ -3314,8 +3380,8 @@ int kernel_getsockopt(struct socket *sock, int level, int optname,
+ 	int __user *uoptlen;
+ 	int err;
+ 
+-	uoptval = (char __user __force *) optval;
+-	uoptlen = (int __user __force *) optlen;
++       uoptval = (char __force_user *) optval;
++       uoptlen = (int __force_user *) optlen;
+ 
+ 	set_fs(KERNEL_DS);
+ 	if (level == SOL_SOCKET)
+@@ -3335,7 +3401,7 @@ int kernel_setsockopt(struct socket *sock, int level, int optname,
+ 	char __user *uoptval;
+ 	int err;
+ 
+-	uoptval = (char __user __force *) optval;
++	uoptval = (char __force_user *) optval;
+ 
+ 	set_fs(KERNEL_DS);
+ 	if (level == SOL_SOCKET)
 diff --git a/net/sunrpc/cache.c b/net/sunrpc/cache.c
 index de0b0f3..7098cc35 100644
 --- a/net/sunrpc/cache.c
@@ -30535,6 +33395,19 @@ index 41cb63b..c4a1489 100644
  
  	/* Build up the XDR from the receive buffers. */
  	rdma_build_arg_xdr(rqstp, ctxt, ctxt->byte_len);
+diff --git a/net/sunrpc/xprtrdma/svc_rdma_sendto.c b/net/sunrpc/xprtrdma/svc_rdma_sendto.c
+index 42eb7ba..c887c45 100644
+--- a/net/sunrpc/xprtrdma/svc_rdma_sendto.c
++++ b/net/sunrpc/xprtrdma/svc_rdma_sendto.c
+@@ -362,7 +362,7 @@ static int send_write(struct svcxprt_rdma *xprt, struct svc_rqst *rqstp,
+ 	write_wr.wr.rdma.remote_addr = to;
+ 
+ 	/* Post It */
+-	atomic_inc(&rdma_stat_write);
++	atomic_inc_unchecked(&rdma_stat_write);
+ 	if (svc_rdma_send(xprt, &write_wr))
+ 		goto err;
+ 	return 0;
 diff --git a/net/sunrpc/xprtrdma/svc_rdma_transport.c b/net/sunrpc/xprtrdma/svc_rdma_transport.c
 index 73b428b..5f3f8f3 100644
 --- a/net/sunrpc/xprtrdma/svc_rdma_transport.c
@@ -30630,6 +33503,71 @@ index 527e3f0..c9dc95c 100644
  	res = register_netdevice_notifier(&notifier);
  	if (!res)
  		eth_started = 1;
+diff --git a/net/tipc/link.c b/net/tipc/link.c
+index b4b9b30..d6f7812 100644
+--- a/net/tipc/link.c
++++ b/net/tipc/link.c
+@@ -1203,7 +1203,7 @@ static int link_send_sections_long(struct tipc_port *sender,
+ 	struct tipc_msg fragm_hdr;
+ 	struct sk_buff *buf, *buf_chain, *prev;
+ 	u32 fragm_crs, fragm_rest, hsz, sect_rest;
+-	const unchar *sect_crs;
++	const unchar __user *sect_crs;
+ 	int curr_sect;
+ 	u32 fragm_no;
+ 
+@@ -1247,7 +1247,7 @@ again:
+ 
+ 		if (!sect_rest) {
+ 			sect_rest = msg_sect[++curr_sect].iov_len;
+-			sect_crs = (const unchar *)msg_sect[curr_sect].iov_base;
++			sect_crs = (const unchar __user *)msg_sect[curr_sect].iov_base;
+ 		}
+ 
+ 		if (sect_rest < fragm_rest)
+@@ -1266,7 +1266,7 @@ error:
+ 			}
+ 		} else
+ 			skb_copy_to_linear_data_offset(buf, fragm_crs,
+-						       sect_crs, sz);
++							(const void __force_kernel *)sect_crs, sz);
+ 		sect_crs += sz;
+ 		sect_rest -= sz;
+ 		fragm_crs += sz;
+@@ -2380,8 +2380,12 @@ static int link_recv_changeover_msg(struct tipc_link **l_ptr,
+ 	struct tipc_msg *tunnel_msg = buf_msg(tunnel_buf);
+ 	u32 msg_typ = msg_type(tunnel_msg);
+ 	u32 msg_count = msg_msgcnt(tunnel_msg);
++	u32 bearer_id = msg_bearer_id(tunnel_msg);
++
++       if (bearer_id >= MAX_BEARERS)
++               goto exit;
++       dest_link = (*l_ptr)->owner->links[bearer_id];
+ 
+-	dest_link = (*l_ptr)->owner->links[msg_bearer_id(tunnel_msg)];
+ 	if (!dest_link)
+ 		goto exit;
+ 	if (dest_link == *l_ptr) {
+@@ -2614,14 +2618,17 @@ int tipc_link_recv_fragment(struct sk_buff **pending, struct sk_buff **fb,
+ 		struct tipc_msg *imsg = (struct tipc_msg *)msg_data(fragm);
+ 		u32 msg_sz = msg_size(imsg);
+ 		u32 fragm_sz = msg_data_sz(fragm);
+-		u32 exp_fragm_cnt = msg_sz/fragm_sz + !!(msg_sz % fragm_sz);
++		u32 exp_fragm_cnt;
+ 		u32 max =  TIPC_MAX_USER_MSG_SIZE + NAMED_H_SIZE;
++
+ 		if (msg_type(imsg) == TIPC_MCAST_MSG)
+ 			max = TIPC_MAX_USER_MSG_SIZE + MCAST_H_SIZE;
+-		if (msg_size(imsg) > max) {
++		if (fragm_sz == 0 || msg_size(imsg) > max) {
+ 			kfree_skb(fbuf);
+ 			return 0;
+ 		}
++
++		exp_fragm_cnt = msg_sz / fragm_sz + !!(msg_sz % fragm_sz);
+ 		pbuf = tipc_buf_acquire(msg_size(imsg));
+ 		if (pbuf != NULL) {
+ 			pbuf->next = *pending;
 diff --git a/net/tipc/msg.c b/net/tipc/msg.c
 index e3afe16..333ea83 100644
 --- a/net/tipc/msg.c
@@ -30656,6 +33594,103 @@ index b2964e9..fdf2e27 100644
  	msg_sect.iov_len = sizeof(struct tipc_event);
  
  	sub->evt.event = htohl(event, sub->swap);
+diff --git a/net/unix/af_unix.c b/net/unix/af_unix.c
+index 8d932a5..c483d5b 100644
+--- a/net/unix/af_unix.c
++++ b/net/unix/af_unix.c
+@@ -780,6 +780,12 @@ static struct sock *unix_find_other(struct net *net,
+ 		err = -ECONNREFUSED;
+ 		if (!S_ISSOCK(inode->i_mode))
+ 			goto put_fail;
++
++               if (!gr_acl_handle_unix(path.dentry, path.mnt)) {
++                       err = -EACCES;
++                       goto put_fail;
++               }
++
+ 		u = unix_find_socket_byinode(inode);
+ 		if (!u)
+ 			goto put_fail;
+@@ -800,6 +806,13 @@ static struct sock *unix_find_other(struct net *net,
+ 		if (u) {
+ 			struct dentry *dentry;
+ 			dentry = unix_sk(u)->path.dentry;
++
++                       if (!gr_handle_chroot_unix(pid_vnr(u->sk_peer_pid))) {
++                               err = -EPERM;
++                               sock_put(u);
++                               goto fail;
++                       }
++
+ 			if (dentry)
+ 				touch_atime(&unix_sk(u)->path);
+ 		} else
+@@ -882,11 +895,20 @@ static int unix_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
+ 		err = security_path_mknod(&path, dentry, mode, 0);
+ 		if (err)
+ 			goto out_mknod_drop_write;
++
++               if (!gr_acl_handle_mknod(dentry, path.dentry, path.mnt, mode)) {
++                       err = -EACCES;
++                       goto out_mknod_drop_write;
++               }
++
+ 		err = vfs_mknod(path.dentry->d_inode, dentry, mode, 0);
+ out_mknod_drop_write:
+ 		mnt_drop_write(path.mnt);
+ 		if (err)
+ 			goto out_mknod_dput;
++
++		gr_handle_create(dentry, path.mnt);
++
+ 		mutex_unlock(&path.dentry->d_inode->i_mutex);
+ 		dput(path.dentry);
+ 		path.dentry = dentry;
+@@ -2213,11 +2235,14 @@ static unsigned int unix_dgram_poll(struct file *file, struct socket *sock,
+ 	writable = unix_writable(sk);
+ 	other = unix_peer_get(sk);
+ 	if (other) {
+-		if (unix_peer(other) != sk) {
++               unix_state_lock(other);
++               if (!sock_flag(other, SOCK_DEAD) && unix_peer(other) != sk) {
++                       unix_state_unlock(other);
+ 			sock_poll_wait(file, &unix_sk(other)->peer_wait, wait);
+ 			if (unix_recvq_full(other))
+ 				writable = 0;
+-		}
++               } else
++                       unix_state_unlock(other);
+ 		sock_put(other);
+ 	}
+ 
+@@ -2309,9 +2334,13 @@ static int unix_seq_show(struct seq_file *seq, void *v)
+ 		seq_puts(seq, "Num       RefCount Protocol Flags    Type St "
+ 			 "Inode Path\n");
+ 	else {
+-		struct sock *s = v;
++		struct sock *s = v, *peer;
+ 		struct unix_sock *u = unix_sk(s);
+ 		unix_state_lock(s);
++               peer = unix_peer(s);
++               unix_state_unlock(s);
++
++               unix_state_double_lock(s, peer);
+ 
+ 		seq_printf(seq, "%pK: %08X %08X %08X %04X %02X %5lu",
+ 			s,
+@@ -2338,8 +2367,10 @@ static int unix_seq_show(struct seq_file *seq, void *v)
+ 			}
+ 			for ( ; i < len; i++)
+ 				seq_putc(seq, u->addr->name->sun_path[i]);
+-		}
+-		unix_state_unlock(s);
++               } else if (peer)
++                       seq_printf(seq, " P%lu", sock_i_ino(peer));
++
++		unix_state_double_unlock(s, peer);
+ 		seq_putc(seq, '\n');
+ 	}
+ 
 diff --git a/net/unix/sysctl_net_unix.c b/net/unix/sysctl_net_unix.c
 index 397cffe..405fdb1 100644
 --- a/net/unix/sysctl_net_unix.c
@@ -31028,6 +34063,19 @@ index 7128dde..374ea22 100644
  	if (err)
  		goto out;
  
+diff --git a/scripts/Kbuild.include b/scripts/Kbuild.include
+index 6a3ee98..0e8109d 100644
+--- a/scripts/Kbuild.include
++++ b/scripts/Kbuild.include
+@@ -143,7 +143,7 @@ cc-ifversion = $(shell [ $(call cc-version, $(CC)) $(1) $(2) ] && echo $(3))
+ # cc-ldoption
+ # Usage: ldflags += $(call cc-ldoption, -Wl$(comma)--hash-style=both)
+ cc-ldoption = $(call try-run,\
+-	$(CC) $(1) -nostdlib -xc /dev/null -o "$$TMP",$(1),$(2))
++	$(CC) $(1) -Wl,-r -nostdlib -x c /dev/null -o "$$TMP",$(1),$(2))
+ 
+ # ld-option
+ # Usage: LDFLAGS += $(call ld-option, -X)
 diff --git a/scripts/Makefile.build b/scripts/Makefile.build
 index ff1720d..ed8475e 100644
 --- a/scripts/Makefile.build
@@ -31409,6 +34457,18 @@ index 87bf080..ddda68d 100644
  	$(PREV) rm $(KERNELPATH)
  	rm -f $(objtree)/.scmversion
  	set -e; \
+diff --git a/scripts/package/builddeb b/scripts/package/builddeb
+index eee5f8e..daec9c3 100644
+--- a/scripts/package/builddeb
++++ b/scripts/package/builddeb
+@@ -246,6 +246,7 @@ fi
+ (cd $srctree; find . -name Makefile -o -name Kconfig\* -o -name \*.pl > "$objtree/debian/hdrsrcfiles")
+ (cd $srctree; find arch/$SRCARCH/include include scripts -type f >> "$objtree/debian/hdrsrcfiles")
+ (cd $objtree; find .config Module.symvers include scripts -type f >> "$objtree/debian/hdrobjfiles")
++(cd $objtree; find tools/gcc -name \*.so >> "$objtree/debian/hdrobjfiles")
+ destdir=$kernel_headers_dir/usr/src/linux-headers-$version
+ mkdir -p "$destdir"
+ (cd $srctree; tar -c -f - -T "$objtree/debian/hdrsrcfiles") | (cd $destdir; tar -xf -)
 diff --git a/scripts/package/mkspec b/scripts/package/mkspec
 index 4bf17dd..bca2734 100755
 --- a/scripts/package/mkspec
@@ -32557,6 +35617,41 @@ index 9b9013b..51ebf96 100644
 +	  This option enables compatability with AppArmor 2.4.  It is
 +          recommended if compatability with older versions of AppArmor
 +          is desired.
+diff --git a/security/apparmor/Makefile b/security/apparmor/Makefile
+index 806bd19..456c8eb 100644
+--- a/security/apparmor/Makefile
++++ b/security/apparmor/Makefile
+@@ -4,9 +4,10 @@ obj-$(CONFIG_SECURITY_APPARMOR) += apparmor.o
+ 
+ apparmor-y := apparmorfs.o audit.o capability.o context.o ipc.o lib.o match.o \
+               path.o domain.o policy.o policy_unpack.o procattr.o lsm.o \
+-              resource.o sid.o file.o
++              resource.o sid.o file.o net.o
++apparmor-$(CONFIG_SECURITY_APPARMOR_COMPAT_24) += apparmorfs-24.o
+ 
+-clean-files := capability_names.h rlim_names.h
++clean-files := capability_names.h rlim_names.h af_names.h
+ 
+ 
+ # Build a lower case string table of capability names
+@@ -55,6 +56,17 @@ cmd_make-rlim = echo "static const char *const rlim_names[RLIM_NLIMITS] = {" \
+ 	sed -r -n 's/^\# ?define[ \t]+RLIMIT_([A-Z0-9_]+).*/\L\1/p' $< | \
+ 	    tr '\n' ' ' | sed -e 's/ $$/"\n/' >> $@
+ 
++# Build a lower case string table of address family names.
++# Transform lines from
++# #define AF_INET              2       /* Internet IP Protocol         */
++# to
++# [2] = "inet",
++quiet_cmd_make-af = GEN     $@
++cmd_make-af = echo "static const char *address_family_names[] = {" > $@ ;\
++       sed $< >> $@ -r -n -e "/AF_MAX/d" -e "/AF_LOCAL/d" -e \
++         's/^\#define[ \t]+AF_([A-Z0-9_]+)[ \t]+([0-9]+).*/[\2] = "\L\1",/p';\
++       echo "};" >> $@
++
+ $(obj)/capability.o : $(obj)/capability_names.h
+ $(obj)/resource.o : $(obj)/rlim_names.h
+ $(obj)/capability_names.h : $(srctree)/include/linux/capability.h \
 diff --git a/security/apparmor/domain.c b/security/apparmor/domain.c
 index 6327685..b81ea10 100644
 --- a/security/apparmor/domain.c
@@ -32904,6 +35999,155 @@ index f1f7506..b8100a7 100644
  	aa_free_rlimit_rules(&profile->rlimits);
  
  	aa_free_sid(profile->sid);
+diff --git a/security/apparmor/policy_unpack.c b/security/apparmor/policy_unpack.c
+index deab7c7..568404d 100644
+--- a/security/apparmor/policy_unpack.c
++++ b/security/apparmor/policy_unpack.c
+@@ -193,6 +193,19 @@ fail:
+ 	return 0;
+ }
+ 
++static bool unpack_u16(struct aa_ext *e, u16 *data, const char *name)
++{
++       if (unpack_nameX(e, AA_U16, name)) {
++               if (!inbounds(e, sizeof(u16)))
++                       return 0;
++               if (data)
++                       *data = le16_to_cpu(get_unaligned((u16 *) e->pos));
++               e->pos += sizeof(u16);
++               return 1;
++       }
++       return 0;
++}
++
+ static bool unpack_u32(struct aa_ext *e, u32 *data, const char *name)
+ {
+ 	if (unpack_nameX(e, AA_U32, name)) {
+@@ -471,6 +484,7 @@ static struct aa_profile *unpack_profile(struct aa_ext *e)
+ {
+ 	struct aa_profile *profile = NULL;
+ 	const char *name = NULL;
++	size_t size = 0;
+ 	int i, error = -EPROTO;
+ 	kernel_cap_t tmpcap;
+ 	u32 tmp;
+@@ -564,6 +578,38 @@ static struct aa_profile *unpack_profile(struct aa_ext *e)
+ 	if (!unpack_rlimits(e, profile))
+ 		goto fail;
+ 
++       size = unpack_array(e, "net_allowed_af");
++       if (size) {
++
++               for (i = 0; i < size; i++) {
++                       /* discard extraneous rules that this kernel will
++                        * never request
++                        */
++                       if (i >= AF_MAX) {
++                               u16 tmp;
++                               if (!unpack_u16(e, &tmp, NULL) ||
++                                   !unpack_u16(e, &tmp, NULL) ||
++                                   !unpack_u16(e, &tmp, NULL))
++                                       goto fail;
++                               continue;
++                       }
++                       if (!unpack_u16(e, &profile->net.allow[i], NULL))
++                               goto fail;
++                       if (!unpack_u16(e, &profile->net.audit[i], NULL))
++                               goto fail;
++                       if (!unpack_u16(e, &profile->net.quiet[i], NULL))
++                               goto fail;
++               }
++               if (!unpack_nameX(e, AA_ARRAYEND, NULL))
++                       goto fail;
++               /*
++                * allow unix domain and netlink sockets they are handled
++                * by IPC
++                */
++       }
++       profile->net.allow[AF_UNIX] = 0xffff;
++       profile->net.allow[AF_NETLINK] = 0xffff;
++
+ 	if (unpack_nameX(e, AA_STRUCT, "policydb")) {
+ 		/* generic policy dfa - optional and may be NULL */
+ 		profile->policy.dfa = unpack_dfa(e);
+diff --git a/security/commoncap.c b/security/commoncap.c
+index 0051ac2..dfa0533 100644
+--- a/security/commoncap.c
++++ b/security/commoncap.c
+@@ -30,6 +30,7 @@
+ #include <linux/user_namespace.h>
+ #include <linux/binfmts.h>
+ #include <linux/personality.h>
++#include <net/sock.h>
+ 
+ #ifdef CONFIG_ANDROID_PARANOID_NETWORK
+ #include <linux/android_aid.h>
+@@ -426,6 +427,45 @@ int get_vfs_caps_from_disk(const struct dentry *dentry, struct cpu_vfs_cap_data
+ 	return 0;
+ }
+ 
++/* returns:
++       1 for suid privilege
++       2 for sgid privilege
++       3 for fscap privilege
++*/
++int is_privileged_binary(const struct dentry *dentry)
++{
++       struct cpu_vfs_cap_data capdata;
++       struct inode *inode = dentry->d_inode;
++
++       if (!inode || S_ISDIR(inode->i_mode))
++               return 0;
++
++       if (inode->i_mode & S_ISUID)
++               return 1;
++       if ((inode->i_mode & (S_ISGID | S_IXGRP)) == (S_ISGID | S_IXGRP))
++               return 2;
++
++       if (!get_vfs_caps_from_disk(dentry, &capdata)) {
++               if (!cap_isclear(capdata.inheritable) || !cap_isclear(capdata.permitted))
++                       return 3;
++       }
++
++       return 0;
++}
++
++/*     returns 1 for suid root privilege
++       returns 3 for fscap privilege
++*/
++int is_root_privileged_binary(const struct dentry *dentry)
++{
++       int ret = is_privileged_binary(dentry);
++       if (ret == 3)
++               return ret;
++       if (ret == 1 && dentry->d_inode->i_uid == 0)
++               return ret;
++       return 0;
++}
++
+ /*
+  * Attempt to get the on-exec apply capability sets for an executable file from
+  * its xattrs and, if present, apply them to the proposed credentials being
+@@ -530,7 +570,8 @@ skip:
+ 	     !cap_issubset(new->cap_permitted, old->cap_permitted)) &&
+ 	    bprm->unsafe & ~LSM_UNSAFE_PTRACE_CAP) {
+ 		/* downgrade; they get no more than they had, and maybe less */
+-		if (!capable(CAP_SETUID)) {
++               if (!capable(CAP_SETUID) ||
++                   (bprm->unsafe & LSM_UNSAFE_NO_NEW_PRIVS)) {
+ 			new->euid = new->uid;
+ 			new->egid = new->gid;
+ 		}
+@@ -587,6 +628,9 @@ int cap_bprm_secureexec(struct linux_binprm *bprm)
+ {
+ 	const struct cred *cred = current_cred();
+ 
++       if (gr_acl_enable_at_secure())
++               return 1;
++
+ 	if (cred->uid != 0) {
+ 		if (bprm->cap_effective)
+ 			return 1;
 diff --git a/security/integrity/ima/ima.h b/security/integrity/ima/ima.h
 index 3ccf7ac..d73ad64 100644
 --- a/security/integrity/ima/ima.h
