@@ -7377,6 +7377,58 @@ index 37f17e0..6a77307 100644
  	int err;
  
  	/* Set up read-only sensors */
+diff --git a/drivers/hwmon/sht15.c b/drivers/hwmon/sht15.c
+index 8b011d0..0007224 100644
+--- a/drivers/hwmon/sht15.c
++++ b/drivers/hwmon/sht15.c
+@@ -166,7 +166,7 @@ struct sht15_data {
+ 	int				supply_uV;
+ 	bool				supply_uV_valid;
+ 	struct work_struct		update_supply_work;
+-	atomic_t			interrupt_handled;
++	atomic_unchecked_t			interrupt_handled;
+ };
+ 
+ /**
+@@ -509,13 +509,13 @@ static int sht15_measurement(struct sht15_data *data,
+ 		return ret;
+ 
+ 	gpio_direction_input(data->pdata->gpio_data);
+-	atomic_set(&data->interrupt_handled, 0);
++	atomic_set_unchecked(&data->interrupt_handled, 0);
+ 
+ 	enable_irq(gpio_to_irq(data->pdata->gpio_data));
+ 	if (gpio_get_value(data->pdata->gpio_data) == 0) {
+ 		disable_irq_nosync(gpio_to_irq(data->pdata->gpio_data));
+ 		/* Only relevant if the interrupt hasn't occurred. */
+-		if (!atomic_read(&data->interrupt_handled))
++		if (!atomic_read_unchecked(&data->interrupt_handled))
+ 			schedule_work(&data->read_work);
+ 	}
+ 	ret = wait_event_timeout(data->wait_queue,
+@@ -782,7 +782,7 @@ static irqreturn_t sht15_interrupt_fired(int irq, void *d)
+ 
+ 	/* First disable the interrupt */
+ 	disable_irq_nosync(irq);
+-	atomic_inc(&data->interrupt_handled);
++	atomic_inc_unchecked(&data->interrupt_handled);
+ 	/* Then schedule a reading work struct */
+ 	if (data->state != SHT15_READING_NOTHING)
+ 		schedule_work(&data->read_work);
+@@ -804,11 +804,11 @@ static void sht15_bh_read_data(struct work_struct *work_s)
+ 		 * If not, then start the interrupt again - care here as could
+ 		 * have gone low in meantime so verify it hasn't!
+ 		 */
+-		atomic_set(&data->interrupt_handled, 0);
++		atomic_set_unchecked(&data->interrupt_handled, 0);
+ 		enable_irq(gpio_to_irq(data->pdata->gpio_data));
+ 		/* If still not occurred or another handler was scheduled */
+ 		if (gpio_get_value(data->pdata->gpio_data)
+-		    || atomic_read(&data->interrupt_handled))
++		    || atomic_read_unchecked(&data->interrupt_handled))
+ 			return;
+ 	}
+ 
 diff --git a/drivers/hwmon/via-cputemp.c b/drivers/hwmon/via-cputemp.c
 index 8689664..e0addce 100644
 --- a/drivers/hwmon/via-cputemp.c
@@ -7429,6 +7481,19 @@ index 29015eb..af2d8e9 100644
  
  /* Wrapper access functions for multiplexed SMBus */
  static DEFINE_MUTEX(nforce2_lock);
+diff --git a/drivers/i2c/i2c-dev.c b/drivers/i2c/i2c-dev.c
+index 4504832..ce17cf6 100644
+--- a/drivers/i2c/i2c-dev.c
++++ b/drivers/i2c/i2c-dev.c
+@@ -272,7 +272,7 @@ static noinline int i2cdev_ioctl_rdrw(struct i2c_client *client,
+ 			res = -EINVAL;
+ 			break;
+ 		}
+-		data_ptrs[i] = (u8 __user *)rdwr_pa[i].buf;
++		data_ptrs[i] = (u8 __force_user *)rdwr_pa[i].buf;
+ 		rdwr_pa[i].buf = memdup_user(data_ptrs[i], rdwr_pa[i].len);
+ 		if (IS_ERR(rdwr_pa[i].buf)) {
+ 			res = PTR_ERR(rdwr_pa[i].buf);
 diff --git a/drivers/ide/ide-cd.c b/drivers/ide/ide-cd.c
 index 8126824..55a2798 100644
 --- a/drivers/ide/ide-cd.c
@@ -7675,6 +7740,28 @@ index 71f0c0f..bd8c8d0 100644
  	if (!can_do_mlock())
  		return ERR_PTR(-EPERM);
  
+diff --git a/drivers/infiniband/hw/cxgb4/mem.c b/drivers/infiniband/hw/cxgb4/mem.c
+index 40c8353..946b0e4 100644
+--- a/drivers/infiniband/hw/cxgb4/mem.c
++++ b/drivers/infiniband/hw/cxgb4/mem.c
+@@ -122,7 +122,7 @@ static int write_tpt_entry(struct c4iw_rdev *rdev, u32 reset_tpt_entry,
+ 	int err;
+ 	struct fw_ri_tpte tpt;
+ 	u32 stag_idx;
+-	static atomic_t key;
++	static atomic_unchecked_t key;
+ 
+ 	if (c4iw_fatal_error(rdev))
+ 		return -EIO;
+@@ -135,7 +135,7 @@ static int write_tpt_entry(struct c4iw_rdev *rdev, u32 reset_tpt_entry,
+ 					     &rdev->resource.tpt_fifo_lock);
+ 		if (!stag_idx)
+ 			return -ENOMEM;
+-		*stag = (stag_idx << 8) | (atomic_inc_return(&key) & 0xff);
++		*stag = (stag_idx << 8) | (atomic_inc_return_unchecked(&key) & 0xff);
+ 	}
+ 	PDBG("%s stag_state 0x%0x type 0x%0x pdid 0x%0x, stag_idx 0x%x\n",
+ 	     __func__, stag_state, type, pdid, stag_idx);
 diff --git a/drivers/infiniband/hw/ipath/ipath_dma.c b/drivers/infiniband/hw/ipath/ipath_dma.c
 index 644c2c7..ecf0879 100644
 --- a/drivers/infiniband/hw/ipath/ipath_dma.c
@@ -8300,6 +8387,19 @@ index 8b8812d..a5e1133 100644
  	nesqp->destroyed = 1;
  
  	/* Blow away the connection if it exists. */
+diff --git a/drivers/input/evdev.c b/drivers/input/evdev.c
+index 9ed3d53..687536a 100644
+--- a/drivers/input/evdev.c
++++ b/drivers/input/evdev.c
+@@ -342,7 +342,7 @@ static int evdev_open(struct inode *inode, struct file *file)
+ 
+  err_free_client:
+ 	evdev_detach_client(evdev, client);
+-	kfree(client);
++	kvfree(client);
+  err_put_evdev:
+ 	put_device(&evdev->dev);
+ 	return error;
 diff --git a/drivers/input/gameport/gameport.c b/drivers/input/gameport/gameport.c
 index da739d9..da1c7f4 100644
 --- a/drivers/input/gameport/gameport.c
@@ -8321,6 +8421,28 @@ index da739d9..da1c7f4 100644
  	gameport->dev.bus = &gameport_bus;
  	gameport->dev.release = gameport_release_port;
  	if (gameport->parent)
+diff --git a/drivers/input/input.c b/drivers/input/input.c
+index 661e7ae..55cd14e 100644
+--- a/drivers/input/input.c
++++ b/drivers/input/input.c
+@@ -1817,7 +1817,7 @@ static void input_cleanse_bitmasks(struct input_dev *dev)
+  */
+ int input_register_device(struct input_dev *dev)
+ {
+-	static atomic_t input_no = ATOMIC_INIT(0);
++	static atomic_unchecked_t input_no = ATOMIC_INIT(0);
+ 	struct input_handler *handler;
+ 	const char *path;
+ 	int error;
+@@ -1854,7 +1854,7 @@ int input_register_device(struct input_dev *dev)
+ 		dev->setkeycode = input_default_setkeycode;
+ 
+ 	dev_set_name(&dev->dev, "input%ld",
+-		     (unsigned long) atomic_inc_return(&input_no) - 1);
++		     (unsigned long) atomic_inc_return_unchecked(&input_no) - 1);
+ 
+ 	error = device_add(&dev->dev);
+ 	if (error)
 diff --git a/drivers/input/joystick/xpad.c b/drivers/input/joystick/xpad.c
 index fd7a0d5..a4af10c 100644
 --- a/drivers/input/joystick/xpad.c
@@ -8807,6 +8929,63 @@ index 334feab..154d7e7 100644
  dsp_cmx_send(void *arg)
  {
  	struct dsp_conf *conf;
+diff --git a/drivers/leds/leds-clevo-mail.c b/drivers/leds/leds-clevo-mail.c
+index 1ed1677..1e3101b 100644
+--- a/drivers/leds/leds-clevo-mail.c
++++ b/drivers/leds/leds-clevo-mail.c
+@@ -39,7 +39,7 @@ static int __init clevo_mail_led_dmi_callback(const struct dmi_system_id *id)
+  * detected as working, but in reality it is not) as low as
+  * possible.
+  */
+-static struct dmi_system_id __initdata mail_led_whitelist[] = {
++static struct dmi_system_id __initconst mail_led_whitelist[] = {
+ 	{
+ 		.callback = clevo_mail_led_dmi_callback,
+ 		.ident = "Clevo D410J",
+diff --git a/drivers/leds/leds-ss4200.c b/drivers/leds/leds-ss4200.c
+index 57371e1..3245f78 100644
+--- a/drivers/leds/leds-ss4200.c
++++ b/drivers/leds/leds-ss4200.c
+@@ -92,7 +92,7 @@ MODULE_PARM_DESC(nodetect, "Skip DMI-based hardware detection");
+  * detected as working, but in reality it is not) as low as
+  * possible.
+  */
+-static struct dmi_system_id __initdata nas_led_whitelist[] = {
++static struct dmi_system_id __initconst nas_led_whitelist[] = {
+ 	{
+ 		.callback = ss4200_led_dmi_callback,
+ 		.ident = "Intel SS4200-E",
+diff --git a/drivers/lguest/core.c b/drivers/lguest/core.c
+index b5fdcb7..0bceff3 100644
+--- a/drivers/lguest/core.c
++++ b/drivers/lguest/core.c
+@@ -92,9 +92,17 @@ static __init int map_switcher(void)
+ 	 * it's worked so far.  The end address needs +1 because __get_vm_area
+ 	 * allocates an extra guard page, so we need space for that.
+ 	 */
++
++#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_KERNEXEC)
++       switcher_vma = __get_vm_area(TOTAL_SWITCHER_PAGES * PAGE_SIZE,
++                                    VM_ALLOC | VM_KERNEXEC, switcher_addr, switcher_addr
++                                    + (TOTAL_SWITCHER_PAGES+1) * PAGE_SIZE);
++#else
+ 	switcher_vma = __get_vm_area(TOTAL_SWITCHER_PAGES * PAGE_SIZE,
+ 				     VM_ALLOC, SWITCHER_ADDR, SWITCHER_ADDR
+ 				     + (TOTAL_SWITCHER_PAGES+1) * PAGE_SIZE);
++#endif
++
+ 	if (!switcher_vma) {
+ 		err = -ENOMEM;
+ 		printk("lguest: could not map switcher pages high\n");
+@@ -119,7 +127,7 @@ static __init int map_switcher(void)
+ 	 * Now the Switcher is mapped at the right address, we can't fail!
+ 	 * Copy in the compiled-in Switcher code (from x86/switcher_32.S).
+ 	 */
+-	memcpy(switcher_vma->addr, start_switcher_text,
++	memcpy(switcher_vma->addr, ktla_ktva(start_switcher_text),
+ 	       end_switcher_text - start_switcher_text);
+ 
+ 	printk(KERN_INFO "lguest: mapped switcher at %p\n",
 diff --git a/drivers/lguest/page_tables.c b/drivers/lguest/page_tables.c
 index 3b62be16..e33134a 100644
 --- a/drivers/lguest/page_tables.c
@@ -8895,6 +9074,82 @@ index a1a3e6d..1918bfc 100644
  		if (!*param->name) {
  			DMWARN("name not supplied when creating device");
  			return -EINVAL;
+diff --git a/drivers/md/dm-raid1.c b/drivers/md/dm-raid1.c
+index d039de8..0cf5b87 100644
+--- a/drivers/md/dm-raid1.c
++++ b/drivers/md/dm-raid1.c
+@@ -40,7 +40,7 @@ enum dm_raid1_error {
+ 
+ struct mirror {
+ 	struct mirror_set *ms;
+-	atomic_t error_count;
++	atomic_unchecked_t error_count;
+ 	unsigned long error_type;
+ 	struct dm_dev *dev;
+ 	sector_t offset;
+@@ -185,7 +185,7 @@ static struct mirror *get_valid_mirror(struct mirror_set *ms)
+ 	struct mirror *m;
+ 
+ 	for (m = ms->mirror; m < ms->mirror + ms->nr_mirrors; m++)
+-		if (!atomic_read(&m->error_count))
++		if (!atomic_read_unchecked(&m->error_count))
+ 			return m;
+ 
+ 	return NULL;
+@@ -217,7 +217,7 @@ static void fail_mirror(struct mirror *m, enum dm_raid1_error error_type)
+ 	 * simple way to tell if a device has encountered
+ 	 * errors.
+ 	 */
+-	atomic_inc(&m->error_count);
++	atomic_inc_unchecked(&m->error_count);
+ 
+ 	if (test_and_set_bit(error_type, &m->error_type))
+ 		return;
+@@ -408,7 +408,7 @@ static struct mirror *choose_mirror(struct mirror_set *ms, sector_t sector)
+ 	struct mirror *m = get_default_mirror(ms);
+ 
+ 	do {
+-		if (likely(!atomic_read(&m->error_count)))
++		if (likely(!atomic_read_unchecked(&m->error_count)))
+ 			return m;
+ 
+ 		if (m-- == ms->mirror)
+@@ -422,7 +422,7 @@ static int default_ok(struct mirror *m)
+ {
+ 	struct mirror *default_mirror = get_default_mirror(m->ms);
+ 
+-	return !atomic_read(&default_mirror->error_count);
++	return !atomic_read_unchecked(&default_mirror->error_count);
+ }
+ 
+ static int mirror_available(struct mirror_set *ms, struct bio *bio)
+@@ -559,7 +559,7 @@ static void do_reads(struct mirror_set *ms, struct bio_list *reads)
+ 		 */
+ 		if (likely(region_in_sync(ms, region, 1)))
+ 			m = choose_mirror(ms, bio->bi_sector);
+-		else if (m && atomic_read(&m->error_count))
++		else if (m && atomic_read_unchecked(&m->error_count))
+ 			m = NULL;
+ 
+ 		if (likely(m))
+@@ -938,7 +938,7 @@ static int get_mirror(struct mirror_set *ms, struct dm_target *ti,
+ 	}
+ 
+ 	ms->mirror[mirror].ms = ms;
+-	atomic_set(&(ms->mirror[mirror].error_count), 0);
++	atomic_set_unchecked(&(ms->mirror[mirror].error_count), 0);
+ 	ms->mirror[mirror].error_type = 0;
+ 	ms->mirror[mirror].offset = offset;
+ 
+@@ -1351,7 +1351,7 @@ static void mirror_resume(struct dm_target *ti)
+  */
+ static char device_status_char(struct mirror *m)
+ {
+-	if (!atomic_read(&(m->error_count)))
++	if (!atomic_read_unchecked(&(m->error_count)))
+ 		return 'A';
+ 
+ 	return (test_bit(DM_RAID1_FLUSH_ERROR, &(m->error_type))) ? 'F' :
 diff --git a/drivers/md/dm-stripe.c b/drivers/md/dm-stripe.c
 index 35c94ff..20d4c17 100644
 --- a/drivers/md/dm-stripe.c
@@ -9039,6 +9294,115 @@ index e24143c..ce2f21a1 100644
  }
  
  void dm_uevent_add(struct mapped_device *md, struct list_head *elist)
+diff --git a/drivers/md/md.c b/drivers/md/md.c
+index 01233d8..c6d99b8 100644
+--- a/drivers/md/md.c
++++ b/drivers/md/md.c
+@@ -277,10 +277,10 @@ EXPORT_SYMBOL_GPL(md_trim_bio);
+  *  start build, activate spare
+  */
+ static DECLARE_WAIT_QUEUE_HEAD(md_event_waiters);
+-static atomic_t md_event_count;
++static atomic_unchecked_t md_event_count;
+ void md_new_event(struct mddev *mddev)
+ {
+-	atomic_inc(&md_event_count);
++	atomic_inc_unchecked(&md_event_count);
+ 	wake_up(&md_event_waiters);
+ }
+ EXPORT_SYMBOL_GPL(md_new_event);
+@@ -290,7 +290,7 @@ EXPORT_SYMBOL_GPL(md_new_event);
+  */
+ static void md_new_event_inintr(struct mddev *mddev)
+ {
+-	atomic_inc(&md_event_count);
++	atomic_inc_unchecked(&md_event_count);
+ 	wake_up(&md_event_waiters);
+ }
+ 
+@@ -1526,7 +1526,7 @@ static int super_1_load(struct md_rdev *rdev, struct md_rdev *refdev, int minor_
+ 
+ 	rdev->preferred_minor = 0xffff;
+ 	rdev->data_offset = le64_to_cpu(sb->data_offset);
+-	atomic_set(&rdev->corrected_errors, le32_to_cpu(sb->cnt_corrected_read));
++	atomic_set_unchecked(&rdev->corrected_errors, le32_to_cpu(sb->cnt_corrected_read));
+ 
+ 	rdev->sb_size = le32_to_cpu(sb->max_dev) * 2 + 256;
+ 	bmask = queue_logical_block_size(rdev->bdev->bd_disk->queue)-1;
+@@ -1745,7 +1745,7 @@ static void super_1_sync(struct mddev *mddev, struct md_rdev *rdev)
+ 	else
+ 		sb->resync_offset = cpu_to_le64(0);
+ 
+-	sb->cnt_corrected_read = cpu_to_le32(atomic_read(&rdev->corrected_errors));
++	sb->cnt_corrected_read = cpu_to_le32(atomic_read_unchecked(&rdev->corrected_errors));
+ 
+ 	sb->raid_disks = cpu_to_le32(mddev->raid_disks);
+ 	sb->size = cpu_to_le64(mddev->dev_sectors);
+@@ -2691,7 +2691,7 @@ __ATTR(state, S_IRUGO|S_IWUSR, state_show, state_store);
+ static ssize_t
+ errors_show(struct md_rdev *rdev, char *page)
+ {
+-	return sprintf(page, "%d\n", atomic_read(&rdev->corrected_errors));
++	return sprintf(page, "%d\n", atomic_read_unchecked(&rdev->corrected_errors));
+ }
+ 
+ static ssize_t
+@@ -2700,7 +2700,7 @@ errors_store(struct md_rdev *rdev, const char *buf, size_t len)
+ 	char *e;
+ 	unsigned long n = simple_strtoul(buf, &e, 10);
+ 	if (*buf && (*e == 0 || *e == '\n')) {
+-		atomic_set(&rdev->corrected_errors, n);
++		atomic_set_unchecked(&rdev->corrected_errors, n);
+ 		return len;
+ 	}
+ 	return -EINVAL;
+@@ -3086,8 +3086,8 @@ int md_rdev_init(struct md_rdev *rdev)
+ 	rdev->sb_loaded = 0;
+ 	rdev->bb_page = NULL;
+ 	atomic_set(&rdev->nr_pending, 0);
+-	atomic_set(&rdev->read_errors, 0);
+-	atomic_set(&rdev->corrected_errors, 0);
++	atomic_set_unchecked(&rdev->read_errors, 0);
++	atomic_set_unchecked(&rdev->corrected_errors, 0);
+ 
+ 	INIT_LIST_HEAD(&rdev->same_set);
+ 	init_waitqueue_head(&rdev->blocked_wait);
+@@ -6738,7 +6738,7 @@ static int md_seq_show(struct seq_file *seq, void *v)
+ 
+ 		spin_unlock(&pers_lock);
+ 		seq_printf(seq, "\n");
+-		seq->poll_event = atomic_read(&md_event_count);
++		seq->poll_event = atomic_read_unchecked(&md_event_count);
+ 		return 0;
+ 	}
+ 	if (v == (void*)2) {
+@@ -6841,7 +6841,7 @@ static int md_seq_open(struct inode *inode, struct file *file)
+ 		return error;
+ 
+ 	seq = file->private_data;
+-	seq->poll_event = atomic_read(&md_event_count);
++	seq->poll_event = atomic_read_unchecked(&md_event_count);
+ 	return error;
+ }
+ 
+@@ -6855,7 +6855,7 @@ static unsigned int mdstat_poll(struct file *filp, poll_table *wait)
+ 	/* always allow read */
+ 	mask = POLLIN | POLLRDNORM;
+ 
+-	if (seq->poll_event != atomic_read(&md_event_count))
++	if (seq->poll_event != atomic_read_unchecked(&md_event_count))
+ 		mask |= POLLERR | POLLPRI;
+ 	return mask;
+ }
+@@ -6899,7 +6899,7 @@ static int is_mddev_idle(struct mddev *mddev, int init)
+ 		struct gendisk *disk = rdev->bdev->bd_contains->bd_disk;
+ 		curr_events = (int)part_stat_read(&disk->part0, sectors[0]) +
+ 			      (int)part_stat_read(&disk->part0, sectors[1]) -
+-			      atomic_read(&disk->sync_io);
++			      atomic_read_unchecked(&disk->sync_io);
+ 		/* sync IO will cause sync_io to increase before the disk_stats
+ 		 * as sync_io is counted when a request starts, and
+ 		 * disk_stats is counted when it completes.
 diff --git a/drivers/md/md.h b/drivers/md/md.h
 index 1c2063c..9639970 100644
 --- a/drivers/md/md.h
@@ -9165,6 +9529,65 @@ index 3f91c2e..e1f37bd 100644
  			}
  
  			rdev_dec_pending(rdev, mddev);
+diff --git a/drivers/md/raid5.c b/drivers/md/raid5.c
+index f351422..6b5d1d8 100644
+--- a/drivers/md/raid5.c
++++ b/drivers/md/raid5.c
+@@ -1420,6 +1420,10 @@ static int grow_one_stripe(struct r5conf *conf)
+ 	return 1;
+ }
+ 
++#ifdef CONFIG_GRKERNSEC_HIDESYM
++static atomic_unchecked_t raid5_cache_id = ATOMIC_INIT(0);
++#endif
++
+ static int grow_stripes(struct r5conf *conf, int num)
+ {
+ 	struct kmem_cache *sc;
+@@ -1430,7 +1434,11 @@ static int grow_stripes(struct r5conf *conf, int num)
+ 			"raid%d-%s", conf->level, mdname(conf->mddev));
+ 	else
+ 		sprintf(conf->cache_name[0],
++#ifdef CONFIG_GRKERNSEC_HIDESYM
++                       "raid%d-%08lx", conf->level, atomic_inc_return_unchecked(&raid5_cache_id));
++#else
+ 			"raid%d-%p", conf->level, conf->mddev);
++#endif
+ 	sprintf(conf->cache_name[1], "%s-alt", conf->cache_name[0]);
+ 
+ 	conf->active_name = 0;
+@@ -1686,18 +1694,18 @@ static void raid5_end_read_request(struct bio * bi, int error)
+ 				(unsigned long long)(sh->sector
+ 						     + rdev->data_offset),
+ 				bdevname(rdev->bdev, b));
+-			atomic_add(STRIPE_SECTORS, &rdev->corrected_errors);
++			atomic_add_unchecked(STRIPE_SECTORS, &rdev->corrected_errors);
+ 			clear_bit(R5_ReadError, &sh->dev[i].flags);
+ 			clear_bit(R5_ReWrite, &sh->dev[i].flags);
+ 		}
+-		if (atomic_read(&rdev->read_errors))
+-			atomic_set(&rdev->read_errors, 0);
++		if (atomic_read_unchecked(&rdev->read_errors))
++			atomic_set_unchecked(&rdev->read_errors, 0);
+ 	} else {
+ 		const char *bdn = bdevname(rdev->bdev, b);
+ 		int retry = 0;
+ 
+ 		clear_bit(R5_UPTODATE, &sh->dev[i].flags);
+-		atomic_inc(&rdev->read_errors);
++		atomic_inc_unchecked(&rdev->read_errors);
+ 		if (test_bit(R5_ReadRepl, &sh->dev[i].flags))
+ 			printk_ratelimited(
+ 				KERN_WARNING
+@@ -1726,7 +1734,7 @@ static void raid5_end_read_request(struct bio * bi, int error)
+ 				(unsigned long long)(sh->sector
+ 						     + rdev->data_offset),
+ 				bdn);
+-		else if (atomic_read(&rdev->read_errors)
++		else if (atomic_read_unchecked(&rdev->read_errors)
+ 			 > conf->max_nr_stripes)
+ 			printk(KERN_WARNING
+ 			       "md/raid:%s: Too many read errors, failing device %s.\n",
 diff --git a/drivers/media/radio/radio-maxiradio.c b/drivers/media/radio/radio-maxiradio.c
 index 740a3d5..de15679 100644
 --- a/drivers/media/radio/radio-maxiradio.c
