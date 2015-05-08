@@ -10321,6 +10321,145 @@ index bf867a6..01dfbfc 100644
  module_param(radio_nr, int, 0444);
  MODULE_PARM_DESC(radio_nr, "Radio Nr");
  
+diff --git a/drivers/media/video/v4l2-compat-ioctl32.c b/drivers/media/video/v4l2-compat-ioctl32.c
+index 2829d25..e347431 100644
+--- a/drivers/media/video/v4l2-compat-ioctl32.c
++++ b/drivers/media/video/v4l2-compat-ioctl32.c
+@@ -331,7 +331,7 @@ struct v4l2_buffer32 {
+ 	__u32			reserved;
+ };
+ 
+-static int get_v4l2_plane32(struct v4l2_plane *up, struct v4l2_plane32 *up32,
++static int get_v4l2_plane32(struct v4l2_plane __user *up, struct v4l2_plane32 __user *up32,
+ 				enum v4l2_memory memory)
+ {
+ 	void __user *up_pln;
+@@ -357,7 +357,7 @@ static int get_v4l2_plane32(struct v4l2_plane *up, struct v4l2_plane32 *up32,
+ 	return 0;
+ }
+ 
+-static int put_v4l2_plane32(struct v4l2_plane *up, struct v4l2_plane32 *up32,
++static int put_v4l2_plane32(struct v4l2_plane __user *up, struct v4l2_plane32 __user *up32,
+ 				enum v4l2_memory memory)
+ {
+ 	if (copy_in_user(up32, up, 2 * sizeof(__u32)) ||
+@@ -423,7 +423,7 @@ static int get_v4l2_buffer32(struct v4l2_buffer *kp, struct v4l2_buffer32 __user
+ 		 * by passing a very big num_planes value */
+ 		uplane = compat_alloc_user_space(num_planes *
+ 						sizeof(struct v4l2_plane));
+-		kp->m.planes = uplane;
++		kp->m.planes = (struct v4l2_plane __force_kernel *)uplane;
+ 
+ 		while (--num_planes >= 0) {
+ 			ret = get_v4l2_plane32(uplane, uplane32, kp->memory);
+@@ -490,7 +490,7 @@ static int put_v4l2_buffer32(struct v4l2_buffer *kp, struct v4l2_buffer32 __user
+ 		if (num_planes == 0)
+ 			return 0;
+ 
+-		uplane = kp->m.planes;
++		uplane = (struct v4l2_plane __force_user *)kp->m.planes;
+ 		if (get_user(p, &up->m.planes))
+ 			return -EFAULT;
+ 		uplane32 = compat_ptr(p);
+@@ -540,7 +540,8 @@ static int get_v4l2_framebuffer32(struct v4l2_framebuffer *kp, struct v4l2_frame
+ 		get_user(kp->capability, &up->capability) ||
+ 		get_user(kp->flags, &up->flags))
+ 			return -EFAULT;
+-	kp->base = compat_ptr(tmp);
++
++	kp->base = (void __force_kernel *)compat_ptr(tmp);
+ 	get_v4l2_pix_format(&kp->fmt, &up->fmt);
+ 	return 0;
+ }
+@@ -646,7 +647,7 @@ static int get_v4l2_ext_controls32(struct v4l2_ext_controls *kp, struct v4l2_ext
+ 			n * sizeof(struct v4l2_ext_control32)))
+ 		return -EFAULT;
+ 	kcontrols = compat_alloc_user_space(n * sizeof(struct v4l2_ext_control));
+-	kp->controls = kcontrols;
++	kp->controls = (struct v4l2_ext_control __force_kernel *)kcontrols;
+ 	while (--n >= 0) {
+ 		if (copy_in_user(kcontrols, ucontrols, sizeof(*ucontrols)))
+ 			return -EFAULT;
+@@ -668,7 +669,7 @@ static int get_v4l2_ext_controls32(struct v4l2_ext_controls *kp, struct v4l2_ext
+ static int put_v4l2_ext_controls32(struct v4l2_ext_controls *kp, struct v4l2_ext_controls32 __user *up)
+ {
+ 	struct v4l2_ext_control32 __user *ucontrols;
+-	struct v4l2_ext_control __user *kcontrols = kp->controls;
++	struct v4l2_ext_control __user *kcontrols = (struct v4l2_ext_control __force_user *)kp->controls;
+ 	int n = kp->count;
+ 	compat_caddr_t p;
+ 
+diff --git a/drivers/media/video/v4l2-ctrls.c b/drivers/media/video/v4l2-ctrls.c
+index 7da4657..cfbf62c 100644
+--- a/drivers/media/video/v4l2-ctrls.c
++++ b/drivers/media/video/v4l2-ctrls.c
+@@ -1147,8 +1147,8 @@ static int validate_new(const struct v4l2_ctrl *ctrl, struct v4l2_ext_control *c
+ 		return 0;
+ 
+ 	case V4L2_CTRL_TYPE_STRING:
+-		len = strlen(s);
+-		if (len < ctrl->minimum)
++		len = strlen_user(s);
++		if (!len || len < ctrl->minimum)
+ 			return -ERANGE;
+ 		if ((len - ctrl->minimum) % ctrl->step)
+ 			return -ERANGE;
+diff --git a/drivers/media/video/v4l2-device.c b/drivers/media/video/v4l2-device.c
+index 1f203b8..f036ee6 100644
+--- a/drivers/media/video/v4l2-device.c
++++ b/drivers/media/video/v4l2-device.c
+@@ -74,9 +74,9 @@ int v4l2_device_put(struct v4l2_device *v4l2_dev)
+ EXPORT_SYMBOL_GPL(v4l2_device_put);
+ 
+ int v4l2_device_set_name(struct v4l2_device *v4l2_dev, const char *basename,
+-						atomic_t *instance)
++						atomic_unchecked_t *instance)
+ {
+-	int num = atomic_inc_return(instance) - 1;
++	int num = atomic_inc_return_unchecked(instance) - 1;
+ 	int len = strlen(basename);
+ 
+ 	if (basename[len - 1] >= '0' && basename[len - 1] <= '9')
+diff --git a/drivers/media/video/v4l2-ioctl.c b/drivers/media/video/v4l2-ioctl.c
+index 5b2ec1f..d2b1709 100644
+--- a/drivers/media/video/v4l2-ioctl.c
++++ b/drivers/media/video/v4l2-ioctl.c
+@@ -2343,7 +2343,7 @@ static unsigned long cmd_input_size(unsigned int cmd)
+ }
+ 
+ static int check_array_args(unsigned int cmd, void *parg, size_t *array_size,
+-			    void * __user *user_ptr, void ***kernel_ptr)
++			    void  __user **user_ptr, void ***kernel_ptr)
+ {
+ 	int ret = 0;
+ 
+@@ -2358,7 +2358,7 @@ static int check_array_args(unsigned int cmd, void *parg, size_t *array_size,
+ 				ret = -EINVAL;
+ 				break;
+ 			}
+-			*user_ptr = (void __user *)buf->m.planes;
++			*user_ptr = (void __force_user *)buf->m.planes;
+ 			*kernel_ptr = (void *)&buf->m.planes;
+ 			*array_size = sizeof(struct v4l2_plane) * buf->length;
+ 			ret = 1;
+@@ -2376,7 +2376,7 @@ static int check_array_args(unsigned int cmd, void *parg, size_t *array_size,
+ 				ret = -EINVAL;
+ 				break;
+ 			}
+-			*user_ptr = (void __user *)ctrls->controls;
++			*user_ptr = (void __force_user *)ctrls->controls;
+ 			*kernel_ptr = (void *)&ctrls->controls;
+ 			*array_size = sizeof(struct v4l2_ext_control)
+ 				    * ctrls->count;
+@@ -2458,7 +2458,7 @@ video_usercopy(struct file *file, unsigned int cmd, unsigned long arg,
+ 		err = -ENOTTY;
+ 
+ 	if (has_array_args) {
+-		*kernel_ptr = user_ptr;
++		*kernel_ptr = (void __force_kernel *)user_ptr;
+ 		if (copy_to_user(user_ptr, mbuf, array_size))
+ 			err = -EFAULT;
+ 		goto out_array_args;
 diff --git a/drivers/message/fusion/mptbase.c b/drivers/message/fusion/mptbase.c
 index a5c591f..6bd4c29 100644
 --- a/drivers/message/fusion/mptbase.c
@@ -10351,6 +10490,58 @@ index a5c591f..6bd4c29 100644
  	sz = (ioc->reply_sz * ioc->reply_depth) + 128;
  	seq_printf(m, "    {CurRepSz=%d} x {CurRepDepth=%d} = %d bytes ^= 0x%x\n",
  					ioc->reply_sz, ioc->reply_depth, ioc->reply_sz*ioc->reply_depth, sz);
+diff --git a/drivers/message/fusion/mptsas.c b/drivers/message/fusion/mptsas.c
+index 551262e..7551198 100644
+--- a/drivers/message/fusion/mptsas.c
++++ b/drivers/message/fusion/mptsas.c
+@@ -446,6 +446,23 @@ mptsas_is_end_device(struct mptsas_devinfo * attached)
+ 		return 0;
+ }
+ 
++static inline void
++mptsas_set_rphy(MPT_ADAPTER *ioc, struct mptsas_phyinfo *phy_info, struct sas_rphy *rphy)
++{
++	if (phy_info->port_details) {
++		phy_info->port_details->rphy = rphy;
++		dsaswideprintk(ioc, printk(MYIOC_s_DEBUG_FMT "sas_rphy_add: rphy=%p\n",
++		    ioc->name, rphy));
++	}
++
++	if (rphy) {
++		dsaswideprintk(ioc, dev_printk(KERN_DEBUG,
++		    &rphy->dev, MYIOC_s_FMT "add:", ioc->name));
++		dsaswideprintk(ioc, printk(MYIOC_s_DEBUG_FMT "rphy=%p release=%p\n",
++		    ioc->name, rphy, rphy->dev.release));
++	}
++}
++
+ /* no mutex */
+ static void
+ mptsas_port_delete(MPT_ADAPTER *ioc, struct mptsas_portinfo_details * port_details)
+@@ -484,23 +501,6 @@ mptsas_get_rphy(struct mptsas_phyinfo *phy_info)
+ 		return NULL;
+ }
+ 
+-static inline void
+-mptsas_set_rphy(MPT_ADAPTER *ioc, struct mptsas_phyinfo *phy_info, struct sas_rphy *rphy)
+-{
+-	if (phy_info->port_details) {
+-		phy_info->port_details->rphy = rphy;
+-		dsaswideprintk(ioc, printk(MYIOC_s_DEBUG_FMT "sas_rphy_add: rphy=%p\n",
+-		    ioc->name, rphy));
+-	}
+-
+-	if (rphy) {
+-		dsaswideprintk(ioc, dev_printk(KERN_DEBUG,
+-		    &rphy->dev, MYIOC_s_FMT "add:", ioc->name));
+-		dsaswideprintk(ioc, printk(MYIOC_s_DEBUG_FMT "rphy=%p release=%p\n",
+-		    ioc->name, rphy, rphy->dev.release));
+-	}
+-}
+-
+ static inline struct sas_port *
+ mptsas_get_port(struct mptsas_phyinfo *phy_info)
+ {
 diff --git a/drivers/message/fusion/mptscsih.c b/drivers/message/fusion/mptscsih.c
 index 0c3ced7..1fe34ec 100644
 --- a/drivers/message/fusion/mptscsih.c
@@ -10380,6 +10571,134 @@ index 0c3ced7..1fe34ec 100644
  
  	return h->info_kbuf;
  }
+diff --git a/drivers/message/i2o/i2o_proc.c b/drivers/message/i2o/i2o_proc.c
+index 6d115c7..e9b5778 100644
+--- a/drivers/message/i2o/i2o_proc.c
++++ b/drivers/message/i2o/i2o_proc.c
+@@ -255,13 +255,6 @@ static char *scsi_devices[] = {
+ 	"Array Controller Device"
+ };
+ 
+-static char *chtostr(u8 * chars, int n)
+-{
+-	char tmp[256];
+-	tmp[0] = 0;
+-	return strncat(tmp, (char *)chars, n);
+-}
+-
+ static int i2o_report_query_status(struct seq_file *seq, int block_status,
+ 				   char *group)
+ {
+@@ -721,9 +714,9 @@ static int i2o_seq_show_status(struct seq_file *seq, void *v)
+ static int i2o_seq_show_hw(struct seq_file *seq, void *v)
+ {
+ 	struct i2o_controller *c = (struct i2o_controller *)seq->private;
+-	static u32 work32[5];
+-	static u8 *work8 = (u8 *) work32;
+-	static u16 *work16 = (u16 *) work32;
++	u32 work32[5];
++	u8 *work8 = (u8 *) work32;
++	u16 *work16 = (u16 *) work32;
+ 	int token;
+ 	u32 hwcap;
+ 
+@@ -838,8 +831,7 @@ static int i2o_seq_show_ddm_table(struct seq_file *seq, void *v)
+ 
+ 		seq_printf(seq, "%-#7x", ddm_table.i2o_vendor_id);
+ 		seq_printf(seq, "%-#8x", ddm_table.module_id);
+-		seq_printf(seq, "%-29s",
+-			   chtostr(ddm_table.module_name_version, 28));
++		seq_printf(seq, "%-.28s", ddm_table.module_name_version);
+ 		seq_printf(seq, "%9d  ", ddm_table.data_size);
+ 		seq_printf(seq, "%8d", ddm_table.code_size);
+ 
+@@ -940,8 +932,8 @@ static int i2o_seq_show_drivers_stored(struct seq_file *seq, void *v)
+ 
+ 		seq_printf(seq, "%-#7x", dst->i2o_vendor_id);
+ 		seq_printf(seq, "%-#8x", dst->module_id);
+-		seq_printf(seq, "%-29s", chtostr(dst->module_name_version, 28));
+-		seq_printf(seq, "%-9s", chtostr(dst->date, 8));
++		seq_printf(seq, "%-.28s", dst->module_name_version);
++		seq_printf(seq, "%-.8s", dst->date);
+ 		seq_printf(seq, "%8d ", dst->module_size);
+ 		seq_printf(seq, "%8d ", dst->mpb_size);
+ 		seq_printf(seq, "0x%04x", dst->module_flags);
+@@ -1257,9 +1249,9 @@ static int i2o_seq_show_authorized_users(struct seq_file *seq, void *v)
+ static int i2o_seq_show_dev_identity(struct seq_file *seq, void *v)
+ {
+ 	struct i2o_device *d = (struct i2o_device *)seq->private;
+-	static u32 work32[128];	// allow for "stuff" + up to 256 byte (max) serial number
++	u32 work32[128];	// allow for "stuff" + up to 256 byte (max) serial number
+ 	// == (allow) 512d bytes (max)
+-	static u16 *work16 = (u16 *) work32;
++	u16 *work16 = (u16 *) work32;
+ 	int token;
+ 
+ 	token = i2o_parm_field_get(d, 0xF100, -1, &work32, sizeof(work32));
+@@ -1272,14 +1264,10 @@ static int i2o_seq_show_dev_identity(struct seq_file *seq, void *v)
+ 	seq_printf(seq, "Device Class  : %s\n", i2o_get_class_name(work16[0]));
+ 	seq_printf(seq, "Owner TID     : %0#5x\n", work16[2]);
+ 	seq_printf(seq, "Parent TID    : %0#5x\n", work16[3]);
+-	seq_printf(seq, "Vendor info   : %s\n",
+-		   chtostr((u8 *) (work32 + 2), 16));
+-	seq_printf(seq, "Product info  : %s\n",
+-		   chtostr((u8 *) (work32 + 6), 16));
+-	seq_printf(seq, "Description   : %s\n",
+-		   chtostr((u8 *) (work32 + 10), 16));
+-	seq_printf(seq, "Product rev.  : %s\n",
+-		   chtostr((u8 *) (work32 + 14), 8));
++	seq_printf(seq, "Vendor info   : %.16s\n", (u8 *) (work32 + 2));
++	seq_printf(seq, "Product info  : %.16s\n", (u8 *) (work32 + 6));
++	seq_printf(seq, "Description   : %.16s\n", (u8 *) (work32 + 10));
++	seq_printf(seq, "Product rev.  : %.8s\n", (u8 *) (work32 + 14));
+ 
+ 	seq_printf(seq, "Serial number : ");
+ 	print_serial_number(seq, (u8 *) (work32 + 16),
+@@ -1324,10 +1312,8 @@ static int i2o_seq_show_ddm_identity(struct seq_file *seq, void *v)
+ 	}
+ 
+ 	seq_printf(seq, "Registering DDM TID : 0x%03x\n", result.ddm_tid);
+-	seq_printf(seq, "Module name         : %s\n",
+-		   chtostr(result.module_name, 24));
+-	seq_printf(seq, "Module revision     : %s\n",
+-		   chtostr(result.module_rev, 8));
++	seq_printf(seq, "Module name         : %.24s\n", result.module_name);
++	seq_printf(seq, "Module revision     : %.8s\n", result.module_rev);
+ 
+ 	seq_printf(seq, "Serial number       : ");
+ 	print_serial_number(seq, result.serial_number, sizeof(result) - 36);
+@@ -1358,14 +1344,10 @@ static int i2o_seq_show_uinfo(struct seq_file *seq, void *v)
+ 		return 0;
+ 	}
+ 
+-	seq_printf(seq, "Device name     : %s\n",
+-		   chtostr(result.device_name, 64));
+-	seq_printf(seq, "Service name    : %s\n",
+-		   chtostr(result.service_name, 64));
+-	seq_printf(seq, "Physical name   : %s\n",
+-		   chtostr(result.physical_location, 64));
+-	seq_printf(seq, "Instance number : %s\n",
+-		   chtostr(result.instance_number, 4));
++	seq_printf(seq, "Device name     : %.64s\n", result.device_name);
++	seq_printf(seq, "Service name    : %.64s\n", result.service_name);
++	seq_printf(seq, "Physical name   : %.64s\n", result.physical_location);
++	seq_printf(seq, "Instance number : %.4s\n", result.instance_number);
+ 
+ 	return 0;
+ }
+@@ -1374,9 +1356,9 @@ static int i2o_seq_show_uinfo(struct seq_file *seq, void *v)
+ static int i2o_seq_show_sgl_limits(struct seq_file *seq, void *v)
+ {
+ 	struct i2o_device *d = (struct i2o_device *)seq->private;
+-	static u32 work32[12];
+-	static u16 *work16 = (u16 *) work32;
+-	static u8 *work8 = (u8 *) work32;
++	u32 work32[12];
++	u16 *work16 = (u16 *) work32;
++	u8 *work8 = (u8 *) work32;
+ 	int token;
+ 
+ 	token = i2o_parm_field_get(d, 0xF103, -1, &work32, sizeof(work32));
 diff --git a/drivers/message/i2o/iop.c b/drivers/message/i2o/iop.c
 index a8c08f3..155fe3d 100644
 --- a/drivers/message/i2o/iop.c
@@ -10407,6 +10726,19 @@ index a8c08f3..155fe3d 100644
  	INIT_LIST_HEAD(&c->context_list);
  #endif
  
+diff --git a/drivers/mfd/max8925-i2c.c b/drivers/mfd/max8925-i2c.c
+index d9e4b36..e709dba 100644
+--- a/drivers/mfd/max8925-i2c.c
++++ b/drivers/mfd/max8925-i2c.c
+@@ -139,7 +139,7 @@ static int __devinit max8925_probe(struct i2c_client *client,
+ 				   const struct i2c_device_id *id)
+ {
+ 	struct max8925_platform_data *pdata = client->dev.platform_data;
+-	static struct max8925_chip *chip;
++	struct max8925_chip *chip;
+ 
+ 	if (!pdata) {
+ 		pr_info("%s: platform data is missing\n", __func__);
 diff --git a/drivers/mfd/twl4030-irq.c b/drivers/mfd/twl4030-irq.c
 index 5d656e8..92e4cf0 100644
 --- a/drivers/mfd/twl4030-irq.c
@@ -10435,6 +10767,21 @@ index 5d656e8..92e4cf0 100644
  
  	for (i = irq_base; i < irq_end; i++) {
  		irq_set_chip_and_handler(i, &twl4030_irq_chip,
+diff --git a/drivers/misc/c2port/core.c b/drivers/misc/c2port/core.c
+index f428d86..274c368 100644
+--- a/drivers/misc/c2port/core.c
++++ b/drivers/misc/c2port/core.c
+@@ -924,7 +924,9 @@ struct c2port_device *c2port_device_register(char *name,
+ 	mutex_init(&c2dev->mutex);
+ 
+ 	/* Create binary file */
+-	c2port_bin_attrs.size = ops->blocks_num * ops->block_size;
++	pax_open_kernel();
++	*(size_t *)&c2port_bin_attrs.size = ops->blocks_num * ops->block_size;
++	pax_close_kernel();
+ 	ret = device_create_bin_file(c2dev->dev, &c2port_bin_attrs);
+ 	if (unlikely(ret))
+ 		goto error_device_create_bin_file;
 diff --git a/drivers/misc/kgdbts.c b/drivers/misc/kgdbts.c
 index 3aa9a96..59cf685 100644
 --- a/drivers/misc/kgdbts.c
@@ -10793,6 +11140,19 @@ index b94d5f7..7f494c5 100644
  extern int xpc_disengage_timelimit;
  extern int xpc_disengage_timedout;
  extern int xpc_activate_IRQ_rcvd;
+diff --git a/drivers/misc/sgi-xp/xpc_main.c b/drivers/misc/sgi-xp/xpc_main.c
+index 8d082b4..aa749ae 100644
+--- a/drivers/misc/sgi-xp/xpc_main.c
++++ b/drivers/misc/sgi-xp/xpc_main.c
+@@ -162,7 +162,7 @@ static struct notifier_block xpc_die_notifier = {
+ 	.notifier_call = xpc_system_die,
+ };
+ 
+-struct xpc_arch_operations xpc_arch_ops;
++xpc_arch_operations_no_const xpc_arch_ops;
+ 
+ /*
+  * Timer function to enforce the timelimit on the partition disengage.
 diff --git a/drivers/mmc/card/block.c b/drivers/mmc/card/block.c
 index 15bebc8..e6a31f4 100644
 --- a/drivers/mmc/card/block.c
@@ -11280,6 +11640,28 @@ index cb8fd50..bc42ec7 100644
  	.notifier_call	= macvtap_device_event,
  };
  
+diff --git a/drivers/net/phy/phy_device.c b/drivers/net/phy/phy_device.c
+index e8c42d6..7919049 100644
+--- a/drivers/net/phy/phy_device.c
++++ b/drivers/net/phy/phy_device.c
+@@ -207,7 +207,7 @@ static struct phy_device* phy_device_create(struct mii_bus *bus,
+  * Description: Reads the ID registers of the PHY at @addr on the
+  *   @bus, stores it in @phy_id and returns zero on success.
+  */
+-int get_phy_id(struct mii_bus *bus, int addr, u32 *phy_id)
++int get_phy_id(struct mii_bus *bus, int addr, int *phy_id)
+ {
+ 	int phy_reg;
+ 
+@@ -243,7 +243,7 @@ EXPORT_SYMBOL(get_phy_id);
+ struct phy_device * get_phy_device(struct mii_bus *bus, int addr)
+ {
+ 	struct phy_device *dev = NULL;
+-	u32 phy_id;
++	int phy_id;
+ 	int r;
+ 
+ 	r = get_phy_id(bus, addr, &phy_id);
 diff --git a/drivers/net/ppp/ppp_generic.c b/drivers/net/ppp/ppp_generic.c
 index 21d7151..8034208 100644
 --- a/drivers/net/ppp/ppp_generic.c
@@ -11315,6 +11697,129 @@ index 1252d9c..80e660b 100644
  	unsigned char *cp = icp;
  
  	/* We've got a compressed packet; read the change byte */
+diff --git a/drivers/net/tun.c b/drivers/net/tun.c
+index 2391dae6..1118e70 100644
+--- a/drivers/net/tun.c
++++ b/drivers/net/tun.c
+@@ -922,7 +922,7 @@ static int tun_validate(struct nlattr *tb[], struct nlattr *data[])
+ 	return -EINVAL;
+ }
+ 
+-static struct rtnl_link_ops tun_link_ops __read_mostly = {
++static struct rtnl_link_ops tun_link_ops = {
+ 	.kind		= DRV_NAME,
+ 	.priv_size	= sizeof(struct tun_struct),
+ 	.setup		= tun_setup,
+@@ -1241,7 +1241,7 @@ static int set_offload(struct tun_struct *tun, unsigned long arg)
+ }
+ 
+ static long __tun_chr_ioctl(struct file *file, unsigned int cmd,
+-			    unsigned long arg, int ifreq_len)
++			    unsigned long arg, size_t ifreq_len)
+ {
+ 	struct tun_file *tfile = file->private_data;
+ 	struct tun_struct *tun;
+@@ -1252,6 +1252,9 @@ static long __tun_chr_ioctl(struct file *file, unsigned int cmd,
+ 	int vnet_hdr_sz;
+ 	int ret;
+ 
++       if (ifreq_len > sizeof ifr)
++               return -EFAULT;
++
+ #ifdef CONFIG_ANDROID_PARANOID_NETWORK
+ 	if (cmd != TUNGETIFF && !capable(CAP_NET_ADMIN)) {
+ 		return -EPERM;
+diff --git a/drivers/net/usb/hso.c b/drivers/net/usb/hso.c
+index 2d2a688..c63885e 100644
+--- a/drivers/net/usb/hso.c
++++ b/drivers/net/usb/hso.c
+@@ -71,7 +71,7 @@
+ #include <asm/byteorder.h>
+ #include <linux/serial_core.h>
+ #include <linux/serial.h>
+-
++#include <asm/local.h>
+ 
+ #define MOD_AUTHOR			"Option Wireless"
+ #define MOD_DESCRIPTION			"USB High Speed Option driver"
+@@ -1190,7 +1190,7 @@ static void put_rxbuf_data_and_resubmit_ctrl_urb(struct hso_serial *serial)
+ 	struct urb *urb;
+ 
+ 	urb = serial->rx_urb[0];
+-	if (serial->open_count > 0) {
++       if (atomic_read(&serial->port.count) > 0) {
+ 		count = put_rxbuf_data(urb, serial);
+ 		if (count == -1)
+ 			return;
+@@ -1226,7 +1226,7 @@ static void hso_std_serial_read_bulk_callback(struct urb *urb)
+ 	DUMP1(urb->transfer_buffer, urb->actual_length);
+ 
+ 	/* Anyone listening? */
+-	if (serial->open_count == 0)
++	if (atomic_read(&serial->port.count) == 0)
+ 		return;
+ 
+ 	if (status == 0) {
+@@ -1311,8 +1311,7 @@ static int hso_serial_open(struct tty_struct *tty, struct file *filp)
+ 	spin_unlock_irq(&serial->serial_lock);
+ 
+ 	/* check for port already opened, if not set the termios */
+-	serial->open_count++;
+-	if (serial->open_count == 1) {
++	if (atomic_inc_return(&serial->port.count) == 1) {
+ 		serial->rx_state = RX_IDLE;
+ 		/* Force default termio settings */
+ 		_hso_serial_set_termios(tty, NULL);
+@@ -1324,7 +1323,7 @@ static int hso_serial_open(struct tty_struct *tty, struct file *filp)
+ 		result = hso_start_serial_device(serial->parent, GFP_KERNEL);
+ 		if (result) {
+ 			hso_stop_serial_device(serial->parent);
+-			serial->open_count--;
++			atomic_dec(&serial->port.count);
+ 			kref_put(&serial->parent->ref, hso_serial_ref_free);
+ 		}
+ 	} else {
+@@ -1361,10 +1360,10 @@ static void hso_serial_close(struct tty_struct *tty, struct file *filp)
+ 
+ 	/* reset the rts and dtr */
+ 	/* do the actual close */
+-	serial->open_count--;
++	atomic_dec(&serial->port.count);
+ 
+-	if (serial->open_count <= 0) {
+-		serial->open_count = 0;
++       if (atomic_read(&serial->port.count) <= 0) {
++               atomic_set(&serial->port.count, 0);
+ 		spin_lock_irq(&serial->serial_lock);
+ 		if (serial->tty == tty) {
+ 			serial->tty->driver_data = NULL;
+@@ -1446,7 +1445,7 @@ static void hso_serial_set_termios(struct tty_struct *tty, struct ktermios *old)
+ 
+ 	/* the actual setup */
+ 	spin_lock_irqsave(&serial->serial_lock, flags);
+-	if (serial->open_count)
++	if (atomic_read(&serial->port.count))
+ 		_hso_serial_set_termios(tty, old);
+ 	else
+ 		tty->termios = old;
+@@ -1905,7 +1904,7 @@ static void intr_callback(struct urb *urb)
+ 				D1("Pending read interrupt on port %d\n", i);
+ 				spin_lock(&serial->serial_lock);
+ 				if (serial->rx_state == RX_IDLE &&
+-					serial->open_count > 0) {
++                                       atomic_read(&serial->port.count) > 0) {
+ 					/* Setup and send a ctrl req read on
+ 					 * port i */
+ 					if (!serial->rx_urb_filled[0]) {
+@@ -3098,7 +3097,7 @@ static int hso_resume(struct usb_interface *iface)
+ 	/* Start all serial ports */
+ 	for (i = 0; i < HSO_SERIAL_TTY_MINORS; i++) {
+ 		if (serial_table[i] && (serial_table[i]->interface == iface)) {
+-			if (dev2ser(serial_table[i])->open_count) {
++                       if (atomic_read(&dev2ser(serial_table[i])->port.count)) {
+ 				result =
+ 				    hso_start_serial_device(serial_table[i], GFP_NOIO);
+ 				hso_kick_transmit(dev2ser(serial_table[i]));
 diff --git a/drivers/net/usb/sierra_net.c b/drivers/net/usb/sierra_net.c
 index b59cf20..dfcc349 100644
 --- a/drivers/net/usb/sierra_net.c
@@ -11754,6 +12259,28 @@ index a66a13b..0ef399e 100644
  }
  
  static u16 ar9003_calc_ptr_chksum(struct ar9003_txc *ads)
+diff --git a/drivers/net/wireless/ath/ath9k/hw.h b/drivers/net/wireless/ath/ath9k/hw.h
+index e88f182..5a9024f 100644
+--- a/drivers/net/wireless/ath/ath9k/hw.h
++++ b/drivers/net/wireless/ath/ath9k/hw.h
+@@ -614,7 +614,7 @@ struct ath_hw_private_ops {
+ 
+ 	/* ANI */
+ 	void (*ani_cache_ini_regs)(struct ath_hw *ah);
+-};
++} __no_const;
+ 
+ /**
+  * struct ath_hw_ops - callbacks used by hardware code and driver code
+@@ -644,7 +644,7 @@ struct ath_hw_ops {
+ 	void (*antdiv_comb_conf_set)(struct ath_hw *ah,
+ 			struct ath_hw_antcomb_conf *antconf);
+ 
+-};
++} __no_const;
+ 
+ struct ath_nf_limits {
+ 	s16 max;
 diff --git a/drivers/net/wireless/b43/phy_lp.c b/drivers/net/wireless/b43/phy_lp.c
 index 3ae2856..5f06604 100644
 --- a/drivers/net/wireless/b43/phy_lp.c
@@ -11782,6 +12309,28 @@ index faec404..a5277f1 100644
  	}
  
  	D_INFO("*** LOAD DRIVER ***\n");
+diff --git a/drivers/net/wireless/iwlwifi/iwl-trans-pcie.c b/drivers/net/wireless/iwlwifi/iwl-trans-pcie.c
+index 4d7b30d..b2efd60 100644
+--- a/drivers/net/wireless/iwlwifi/iwl-trans-pcie.c
++++ b/drivers/net/wireless/iwlwifi/iwl-trans-pcie.c
+@@ -2106,7 +2106,7 @@ static ssize_t iwl_dbgfs_interrupt_write(struct file *file,
+ 	struct isr_statistics *isr_stats = &trans_pcie->isr_stats;
+ 
+ 	char buf[8];
+-	int buf_size;
++	size_t buf_size;
+ 	u32 reset_flag;
+ 
+ 	memset(buf, 0, sizeof(buf));
+@@ -2127,7 +2127,7 @@ static ssize_t iwl_dbgfs_csr_write(struct file *file,
+ {
+ 	struct iwl_trans *trans = file->private_data;
+ 	char buf[8];
+-	int buf_size;
++	size_t buf_size;
+ 	int csr;
+ 
+ 	memset(buf, 0, sizeof(buf));
 diff --git a/drivers/net/wireless/rndis_wlan.c b/drivers/net/wireless/rndis_wlan.c
 index d66e298..55b0a89 100644
 --- a/drivers/net/wireless/rndis_wlan.c
@@ -11795,6 +12344,32 @@ index d66e298..55b0a89 100644
  		rts_threshold = 2347;
  
  	tmp = cpu_to_le32(rts_threshold);
+diff --git a/drivers/net/wireless/wl1251/sdio.c b/drivers/net/wireless/wl1251/sdio.c
+index 1b851f6..3e7ae03 100644
+--- a/drivers/net/wireless/wl1251/sdio.c
++++ b/drivers/net/wireless/wl1251/sdio.c
+@@ -269,13 +269,17 @@ static int wl1251_sdio_probe(struct sdio_func *func,
+ 		irq_set_irq_type(wl->irq, IRQ_TYPE_EDGE_RISING);
+ 		disable_irq(wl->irq);
+ 
+-		wl1251_sdio_ops.enable_irq = wl1251_enable_line_irq;
+-		wl1251_sdio_ops.disable_irq = wl1251_disable_line_irq;
++		pax_open_kernel();
++		*(void **)&wl1251_sdio_ops.enable_irq = wl1251_enable_line_irq;
++		*(void **)&wl1251_sdio_ops.disable_irq = wl1251_disable_line_irq;
++		pax_close_kernel();
+ 
+ 		wl1251_info("using dedicated interrupt line");
+ 	} else {
+-		wl1251_sdio_ops.enable_irq = wl1251_sdio_enable_irq;
+-		wl1251_sdio_ops.disable_irq = wl1251_sdio_disable_irq;
++		pax_open_kernel();
++		*(void **)&wl1251_sdio_ops.enable_irq = wl1251_sdio_enable_irq;
++		*(void **)&wl1251_sdio_ops.disable_irq = wl1251_sdio_disable_irq;
++		pax_close_kernel();
+ 
+ 		wl1251_info("using SDIO interrupt");
+ 	}
 diff --git a/drivers/net/wireless/zd1211rw/zd_usb.c b/drivers/net/wireless/zd1211rw/zd_usb.c
 index f766b3e..dc8c663 100644
 --- a/drivers/net/wireless/zd1211rw/zd_usb.c
@@ -11941,6 +12516,30 @@ index 38b6fc0..b5cbfce 100644
  };
  
  extern struct oprofile_stat_struct oprofile_stats;
+diff --git a/drivers/oprofile/oprofilefs.c b/drivers/oprofile/oprofilefs.c
+index 849357c..53a76e0 100644
+--- a/drivers/oprofile/oprofilefs.c
++++ b/drivers/oprofile/oprofilefs.c
+@@ -172,8 +172,8 @@ int oprofilefs_create_ro_ulong(struct super_block *sb, struct dentry *root,
+ 
+ static ssize_t atomic_read_file(struct file *file, char __user *buf, size_t count, loff_t *offset)
+ {
+-	atomic_t *val = file->private_data;
+-	return oprofilefs_ulong_to_user(atomic_read(val), buf, count, offset);
++       atomic_unchecked_t *val = file->private_data;
++       return oprofilefs_ulong_to_user(atomic_read_unchecked(val), buf, count, offset);
+ }
+ 
+ 
+@@ -185,7 +185,7 @@ static const struct file_operations atomic_ro_fops = {
+ 
+ 
+ int oprofilefs_create_ro_atomic(struct super_block *sb, struct dentry *root,
+-	char const *name, atomic_t *val)
++	char const *name, atomic_unchecked_t *val)
+ {
+ 	return __oprofilefs_create_file(sb, root, name,
+ 					&atomic_ro_fops, 0444, val);
 diff --git a/drivers/oprofile/timer_int.c b/drivers/oprofile/timer_int.c
 index 93404f7..4a313d8 100644
 --- a/drivers/oprofile/timer_int.c
@@ -12397,6 +12996,28 @@ index 2dab28f..59413d3 100644
  	for (i = 0; i < ARRAY_SIZE(power_supply_attrs); i++)
  		__power_supply_attrs[i] = &power_supply_attrs[i].attr;
  }
+diff --git a/drivers/regulator/core.c b/drivers/regulator/core.c
+index 57cde45..84d5c6a 100644
+--- a/drivers/regulator/core.c
++++ b/drivers/regulator/core.c
+@@ -3256,7 +3256,7 @@ struct regulator_dev *regulator_register(struct regulator_desc *regulator_desc,
+ 	void *driver_data, struct device_node *of_node)
+ {
+ 	const struct regulation_constraints *constraints = NULL;
+-	static atomic_t regulator_no = ATOMIC_INIT(0);
++	static atomic_unchecked_t regulator_no = ATOMIC_INIT(0);
+ 	struct regulator_dev *rdev;
+ 	int ret, i;
+ 	const char *supply = NULL;
+@@ -3314,7 +3314,7 @@ struct regulator_dev *regulator_register(struct regulator_desc *regulator_desc,
+ 	rdev->dev.of_node = of_node;
+ 	rdev->dev.parent = dev;
+ 	dev_set_name(&rdev->dev, "regulator.%d",
+-		     atomic_inc_return(&regulator_no) - 1);
++		     atomic_inc_return_unchecked(&regulator_no) - 1);
+ 	ret = device_register(&rdev->dev);
+ 	if (ret != 0) {
+ 		put_device(&rdev->dev);
 diff --git a/drivers/regulator/max8660.c b/drivers/regulator/max8660.c
 index 4c5b053..104263e 100644
 --- a/drivers/regulator/max8660.c
