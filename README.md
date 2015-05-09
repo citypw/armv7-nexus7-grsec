@@ -37,7 +37,7 @@ software.
 ----------------------------------------------------------------------
 
 # [PaX/Grsecurity](https://grsecurity.net/)
-	[PAGEEXEC](https://pax.grsecurity.net/docs/pageexec.old.txt)
+	- [PAGEEXEC](https://pax.grsecurity.net/docs/pageexec.old.txt)
 
 # GCC plugins
 	* [Inside the Size Overflow Plugin](https://forums.grsecurity.net/viewtopic.php?f=7&t=3043)
