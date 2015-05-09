@@ -36,12 +36,22 @@ software.
 
 ----------------------------------------------------------------------
 
-# [PaX/Grsecurity](https://grsecurity.net/)
-	* [PAGEEXEC]: https://pax.grsecurity.net/docs/pageexec.old.txt
-
+# [PaX/Grsecurity]: https://grsecurity.net/
+	* [PAGEEXEC]:   https://pax.grsecurity.net/docs/pageexec.txt
+	* [SEGMEXEC]:   https://pax.grsecurity.net/docs/segmexec.txt
+	* [ASLR]:       https://pax.grsecurity.net/docs/aslr.txt
+	* [MPROTECT]:   https://pax.grsecurity.net/docs/mprotect.txt
+	* [RANDUSTACK]: https://pax.grsecurity.net/docs/randustack.txt
+	* [RANDKSTACK]: https://pax.grsecurity.net/docs/randkstack.txt
+	* [RANDMMAP]:	https://pax.grsecurity.net/docs/randmmap.txt
+	* [RANDEXEC]:	https://pax.grsecurity.net/docs/randexec.txt
+	* [VMMIRROR]:	https://pax.grsecurity.net/docs/vmmirror.txt
+	* [EMUTRAMP]:	https://pax.grsecurity.net/docs/emutramp.txt
+	* [EMUSIGRT]:	https://pax.grsecurity.net/docs/emusigrt.txt
+	* [UDEREF]:	https://grsecurity.net/~spender/uderef.txt
 # GCC plugins
-	* [Inside the Size Overflow Plugin](https://forums.grsecurity.net/viewtopic.php?f=7&t=3043)
-	* [Better kernels with GCC plugins](https://lwn.net/Articles/461696/)
+	* [Inside the Size Overflow Plugin]: https://forums.grsecurity.net/viewtopic.php?f=7&t=3043
+	* [Better kernels with GCC plugins]: https://lwn.net/Articles/461696/
 
 # History
 ## 2005
@@ -49,18 +59,18 @@ software.
 	* [the "Turing Attack" (was: Sabotaged PaXtest)](https://lkml.org/lkml/2005/2/8/93)
 
 ## 2009
-	* [The future for grsecurity](https://lwn.net/Articles/313621/)
+	* [The future for grsecurity]: https://lwn.net/Articles/313621/
 
 ## 2011
 	* [proactive defense: using read-only memory](http://lwn.net/Articles/415653/)
 
 ## 2012
-	* [Why are the grsecurity patches not included in the Vanilla Kernel?](http://unix.stackexchange.com/questions/59020/why-are-the-grsecurity-patches-not-included-in-the-vanilla-kernel)
+	* [Why are the grsecurity patches not included in the Vanilla Kernel?]: http://unix.stackexchange.com/questions/59020/why-are-the-grsecurity-patches-not-included-in-the-vanilla-kernel
 
 ## 2014
-	* [Some Links for Newbies on Grsecurity, and the Big Picture](https://forums.grsecurity.net/viewtopic.php?f=3&t=3906&p=13803&hilit=ANDROID#p13803)
+	* [Some Links for Newbies on Grsecurity, and the Big Picture]: https://forums.grsecurity.net/viewtopic.php?f=3&t=3906&p=13803&hilit=ANDROID#p13803
 
-	* [How GNU/Linux distros deal with offset2lib attack?](http://www.openwall.com/lists/oss-security/2014/12/06/14)
+	* [How GNU/Linux distros deal with offset2lib attack?]: http://www.openwall.com/lists/oss-security/2014/12/06/14
 
 # Recent isues
-	* [locking bug( it may also an issue in upstream)](https://forums.grsecurity.net/viewtopic.php?f=1&t=4143)
+	* [locking bug( it may also an issue in upstream)]: https://forums.grsecurity.net/viewtopic.php?f=1&t=4143
