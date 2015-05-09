@@ -32,3 +32,35 @@ cars, refrigrator, or everywhere around us, which could be a risk to
 our money-shitty property and even lives. That's one of most important
 reasons we need to "H A R D E N E N I N G   E V E R Y T H I N G" by free
 software.
+
+
+----------------------------------------------------------------------
+
+# [PaX/Grsecurity](https://grsecurity.net/)
+	* [PAGEEXEC](https://pax.grsecurity.net/docs/pageexec.old.txt)
+
+# GCC plugins
+	* [Inside the Size Overflow Plugin](https://forums.grsecurity.net/viewtopic.php?f=7&t=3043)
+	* [Better kernels with GCC plugins](https://lwn.net/Articles/461696/)
+
+# History
+## 2005
+	* [grsecurity 2.1.0 and kernel vulnerabilities](http://lwn.net/Articles/118251/)
+	* [the "Turing Attack" (was: Sabotaged PaXtest)](https://lkml.org/lkml/2005/2/8/93)
+
+## 2009
+	* [The future for grsecurity](https://lwn.net/Articles/313621/)
+
+## 2011
+	* [proactive defense: using read-only memory](http://lwn.net/Articles/415653/)
+
+## 2012
+	* [Why are the grsecurity patches not included in the Vanilla Kernel?](http://unix.stackexchange.com/questions/59020/why-are-the-grsecurity-patches-not-included-in-the-vanilla-kernel)
+
+## 2014
+	* [Some Links for Newbies on Grsecurity, and the Big Picture](https://forums.grsecurity.net/viewtopic.php?f=3&t=3906&p=13803&hilit=ANDROID#p13803)
+
+	* [How GNU/Linux distros deal with offset2lib attack?](http://www.openwall.com/lists/oss-security/2014/12/06/14)
+
+# Recent isues
+	* [locking bug( it may also an issue in upstream)](https://forums.grsecurity.net/viewtopic.php?f=1&t=4143)
