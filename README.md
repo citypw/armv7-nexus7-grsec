@@ -16,7 +16,7 @@ for 14 years. What PaX/Grsecurity brings to us, is amazing and
 incridble work. Unfortunately, there are a lot of reasons that
 PaX/Grsecurity don't get the credit what they deserves. Let me make
 this short: To love those who are hatred by BIG BROTHER. That's the 
-fuc*ing point.
+fuc**ing point.
 
 
 # What makes us ticks
@@ -36,8 +36,8 @@ software.
 
 ----------------------------------------------------------------------
 
-# [PaX/Grsecurity]: https://grsecurity.net/
-	* [PAGEEXEC]:   https://pax.grsecurity.net/docs/pageexec.txt
+# [PaX/Grsecurity](https://grsecurity.net/)
+	* [PAGEEXEC](https://pax.grsecurity.net/docs/pageexec.txt)
 	* [SEGMEXEC]:   https://pax.grsecurity.net/docs/segmexec.txt
 	* [ASLR]:       https://pax.grsecurity.net/docs/aslr.txt
 	* [MPROTECT]:   https://pax.grsecurity.net/docs/mprotect.txt
