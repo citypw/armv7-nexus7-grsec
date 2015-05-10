@@ -36,8 +36,8 @@ software.
 
 ----------------------------------------------------------------------
 
-# [PaX/Grsecurity](https://grsecurity.net/)
-	* [PAGEEXEC](https://pax.grsecurity.net/docs/pageexec.txt)
+# [PaX/Grsecurity]: https://grsecurity.net/
+	* [PAGEEXEC]:	https://pax.grsecurity.net/docs/pageexec.txt
 	* [SEGMEXEC]:   https://pax.grsecurity.net/docs/segmexec.txt
 	* [ASLR]:       https://pax.grsecurity.net/docs/aslr.txt
 	* [MPROTECT]:   https://pax.grsecurity.net/docs/mprotect.txt
@@ -49,20 +49,21 @@ software.
 	* [EMUTRAMP]:	https://pax.grsecurity.net/docs/emutramp.txt
 	* [EMUSIGRT]:	https://pax.grsecurity.net/docs/emusigrt.txt
 	* [UDEREF]:	https://grsecurity.net/~spender/uderef.txt
+
 # GCC plugins
 	* [Inside the Size Overflow Plugin]: https://forums.grsecurity.net/viewtopic.php?f=7&t=3043
 	* [Better kernels with GCC plugins]: https://lwn.net/Articles/461696/
 
 # History
 ## 2005
-	* [grsecurity 2.1.0 and kernel vulnerabilities](http://lwn.net/Articles/118251/)
-	* [the "Turing Attack" (was: Sabotaged PaXtest)](https://lkml.org/lkml/2005/2/8/93)
+	* [grsecurity 2.1.0 and kernel vulnerabilities]: http://lwn.net/Articles/118251/
+	* [the "Turing Attack" (was: Sabotaged PaXtest)]: https://lkml.org/lkml/2005/2/8/93
 
 ## 2009
 	* [The future for grsecurity]: https://lwn.net/Articles/313621/
 
 ## 2011
-	* [proactive defense: using read-only memory](http://lwn.net/Articles/415653/)
+	* [proactive defense: using read-only memory]: http://lwn.net/Articles/415653/
 
 ## 2012
 	* [Why are the grsecurity patches not included in the Vanilla Kernel?]: http://unix.stackexchange.com/questions/59020/why-are-the-grsecurity-patches-not-included-in-the-vanilla-kernel
