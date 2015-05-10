@@ -23154,8 +23154,93 @@ index e88748e..0e5b455 100644
  }
  
  static int
+diff --git a/fs/fat/namei_msdos.c b/fs/fat/namei_msdos.c
+index c5938c9..7629867 100644
+--- a/fs/fat/namei_msdos.c
++++ b/fs/fat/namei_msdos.c
+@@ -674,6 +674,7 @@ static struct file_system_type msdos_fs_type = {
+ 	.kill_sb	= kill_block_super,
+ 	.fs_flags	= FS_REQUIRES_DEV,
+ };
++MODULE_ALIAS_FS("msdo");
+ 
+ static int __init init_msdos_fs(void)
+ {
+diff --git a/fs/fat/namei_vfat.c b/fs/fat/namei_vfat.c
+index 98ae804..0c6e6c4 100644
+--- a/fs/fat/namei_vfat.c
++++ b/fs/fat/namei_vfat.c
+@@ -741,7 +741,12 @@ static struct dentry *vfat_lookup(struct inode *dir, struct dentry *dentry,
+ 	}
+ 
+ 	alias = d_find_alias(inode);
+-	if (alias && !vfat_d_anon_disconn(alias)) {
++	/*
++	 * Checking "alias->d_parent == dentry->d_parent" to make sure
++	 * FS is not corrupted (especially double linked dir).
++	 */
++	if (alias && alias->d_parent == dentry->d_parent &&
++	    !vfat_d_anon_disconn(alias)) {
+ 		/*
+ 		 * This inode has non anonymous-DCACHE_DISCONNECTED
+ 		 * dentry. This means, the user did ->lookup() by an
+@@ -760,11 +765,9 @@ static struct dentry *vfat_lookup(struct inode *dir, struct dentry *dentry,
+ 
+ out:
+ 	unlock_super(sb);
+-	dentry->d_time = dentry->d_parent->d_inode->i_version;
+-	dentry = d_splice_alias(inode, dentry);
+-	if (dentry)
+-		dentry->d_time = dentry->d_parent->d_inode->i_version;
+-	return dentry;
++	if (!inode)
++		dentry->d_time = dir->i_version;
++	return d_splice_alias(inode, dentry);
+ 
+ error:
+ 	unlock_super(sb);
+@@ -798,7 +801,6 @@ static int vfat_create(struct inode *dir, struct dentry *dentry, umode_t mode,
+ 	inode->i_mtime = inode->i_atime = inode->i_ctime = ts;
+ 	/* timestamp is already written, so mark_inode_dirty() is unneeded. */
+ 
+-	dentry->d_time = dentry->d_parent->d_inode->i_version;
+ 	d_instantiate(dentry, inode);
+ out:
+ 	unlock_super(sb);
+@@ -829,6 +831,7 @@ static int vfat_rmdir(struct inode *dir, struct dentry *dentry)
+ 	clear_nlink(inode);
+ 	inode->i_mtime = inode->i_atime = CURRENT_TIME_SEC;
+ 	fat_detach(inode);
++	dentry->d_time = dir->i_version;
+ out:
+ 	unlock_super(sb);
+ 
+@@ -854,6 +857,7 @@ static int vfat_unlink(struct inode *dir, struct dentry *dentry)
+ 	clear_nlink(inode);
+ 	inode->i_mtime = inode->i_atime = CURRENT_TIME_SEC;
+ 	fat_detach(inode);
++	dentry->d_time = dir->i_version;
+ out:
+ 	unlock_super(sb);
+ 
+@@ -894,7 +898,6 @@ static int vfat_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode)
+ 	inode->i_mtime = inode->i_atime = inode->i_ctime = ts;
+ 	/* timestamp is already written, so mark_inode_dirty() is unneeded. */
+ 
+-	dentry->d_time = dentry->d_parent->d_inode->i_version;
+ 	d_instantiate(dentry, inode);
+ 
+ 	unlock_super(sb);
+@@ -1089,6 +1092,7 @@ static void __exit exit_vfat_fs(void)
+ {
+ 	unregister_filesystem(&vfat_fs_type);
+ }
++MODULE_ALIAS_FS("vfat");
+ 
+ MODULE_LICENSE("GPL");
+ MODULE_DESCRIPTION("VFAT filesystem support");
 diff --git a/fs/fcntl.c b/fs/fcntl.c
-index 75e7c1f..e37bc6b 100644
+index 75e7c1f..1eb3e4d 100644
 --- a/fs/fcntl.c
 +++ b/fs/fcntl.c
 @@ -224,6 +224,11 @@ int __f_setown(struct file *filp, struct pid *pid, enum pid_type type,
@@ -23170,6 +23255,32 @@ index 75e7c1f..e37bc6b 100644
  	f_modown(filp, pid, type, force);
  	return 0;
  }
+@@ -266,7 +271,7 @@ pid_t f_getown(struct file *filp)
+ 
+ static int f_setown_ex(struct file *filp, unsigned long arg)
+ {
+-	struct f_owner_ex * __user owner_p = (void * __user)arg;
++	struct f_owner_ex __user *owner_p = (void __user *)arg;
+ 	struct f_owner_ex owner;
+ 	struct pid *pid;
+ 	int type;
+@@ -306,7 +311,7 @@ static int f_setown_ex(struct file *filp, unsigned long arg)
+ 
+ static int f_getown_ex(struct file *filp, unsigned long arg)
+ {
+-	struct f_owner_ex * __user owner_p = (void * __user)arg;
++	struct f_owner_ex __user *owner_p = (void __user *)arg;
+ 	struct f_owner_ex owner;
+ 	int ret = 0;
+ 
+@@ -348,6 +353,7 @@ static long do_fcntl(int fd, unsigned int cmd, unsigned long arg,
+ 	switch (cmd) {
+ 	case F_DUPFD:
+ 	case F_DUPFD_CLOEXEC:
++		gr_learn_resource(current, RLIMIT_NOFILE, arg, 0);
+ 		if (arg >= rlimit(RLIMIT_NOFILE))
+ 			break;
+ 		err = alloc_fd(arg, cmd == F_DUPFD_CLOEXEC ? O_CLOEXEC : 0);
 diff --git a/fs/fhandle.c b/fs/fhandle.c
 index a48e4a1..39e743a 100644
 --- a/fs/fhandle.c
@@ -23213,6 +23324,243 @@ index a48e4a1..39e743a 100644
  			   f_handle.handle_bytes)) {
  		retval = -EFAULT;
  		goto out_handle;
+diff --git a/fs/fifo.c b/fs/fifo.c
+index b1a524d..1ba1e8e 100644
+--- a/fs/fifo.c
++++ b/fs/fifo.c
+@@ -58,10 +58,10 @@ static int fifo_open(struct inode *inode, struct file *filp)
+ 	 */
+ 		filp->f_op = &read_pipefifo_fops;
+ 		pipe->r_counter++;
+-		if (pipe->readers++ == 0)
++		if (atomic_inc_return(&pipe->readers) == 0)
+ 			wake_up_partner(inode);
+ 
+-		if (!pipe->writers) {
++		if (!atomic_read(&pipe->writers)) {
+ 			if ((filp->f_flags & O_NONBLOCK)) {
+ 				/* suppress POLLHUP until we have
+ 				 * seen a writer */
+@@ -81,15 +81,15 @@ static int fifo_open(struct inode *inode, struct file *filp)
+ 	 *  errno=ENXIO when there is no process reading the FIFO.
+ 	 */
+ 		ret = -ENXIO;
+-		if ((filp->f_flags & O_NONBLOCK) && !pipe->readers)
++		if ((filp->f_flags & O_NONBLOCK) && !atomic_read(&pipe->readers))
+ 			goto err;
+ 
+ 		filp->f_op = &write_pipefifo_fops;
+ 		pipe->w_counter++;
+-		if (!pipe->writers++)
++		if (atomic_inc_return(&pipe->writers) == 1)
+ 			wake_up_partner(inode);
+ 
+-		if (!pipe->readers) {
++		if (!atomic_read(&pipe->readers)) {
+ 			wait_for_partner(inode, &pipe->r_counter);
+ 			if (signal_pending(current))
+ 				goto err_wr;
+@@ -105,11 +105,11 @@ static int fifo_open(struct inode *inode, struct file *filp)
+ 	 */
+ 		filp->f_op = &rdwr_pipefifo_fops;
+ 
+-		pipe->readers++;
+-		pipe->writers++;
++		atomic_inc(&pipe->readers);
++		atomic_inc(&pipe->writers);
+ 		pipe->r_counter++;
+ 		pipe->w_counter++;
+-		if (pipe->readers == 1 || pipe->writers == 1)
++		if (atomic_read(&pipe->readers) == 1 || atomic_read(&pipe->writers) == 1)
+ 			wake_up_partner(inode);
+ 		break;
+ 
+@@ -123,19 +123,19 @@ static int fifo_open(struct inode *inode, struct file *filp)
+ 	return 0;
+ 
+ err_rd:
+-	if (!--pipe->readers)
++	if (atomic_dec_and_test(&pipe->readers))
+ 		wake_up_interruptible(&pipe->wait);
+ 	ret = -ERESTARTSYS;
+ 	goto err;
+ 
+ err_wr:
+-	if (!--pipe->writers)
++	if (atomic_dec_and_test(&pipe->writers))
+ 		wake_up_interruptible(&pipe->wait);
+ 	ret = -ERESTARTSYS;
+ 	goto err;
+ 
+ err:
+-	if (!pipe->readers && !pipe->writers)
++	if (!atomic_read(&pipe->readers) && !atomic_read(&pipe->writers))
+ 		free_pipe_info(inode);
+ 
+ err_nocleanup:
+diff --git a/fs/file.c b/fs/file.c
+index ba3f605..410bfbf 100644
+--- a/fs/file.c
++++ b/fs/file.c
+@@ -15,6 +15,7 @@
+ #include <linux/slab.h>
+ #include <linux/vmalloc.h>
+ #include <linux/file.h>
++#include <linux/security.h>
+ #include <linux/fdtable.h>
+ #include <linux/bitops.h>
+ #include <linux/interrupt.h>
+@@ -200,7 +201,7 @@ out:
+  * Return <0 error code on error; 1 on successful completion.
+  * The files->file_lock should be held on entry, and will be held on exit.
+  */
+-static int expand_fdtable(struct files_struct *files, int nr)
++static int expand_fdtable(struct files_struct *files, unsigned int nr)
+ 	__releases(files->file_lock)
+ 	__acquires(files->file_lock)
+ {
+@@ -245,7 +246,7 @@ static int expand_fdtable(struct files_struct *files, int nr)
+  * expanded and execution may have blocked.
+  * The files->file_lock should be held on entry, and will be held on exit.
+  */
+-int expand_files(struct files_struct *files, int nr)
++int expand_files(struct files_struct *files, unsigned int nr)
+ {
+ 	struct fdtable *fdt;
+ 
+@@ -255,6 +256,7 @@ int expand_files(struct files_struct *files, int nr)
+ 	 * N.B. For clone tasks sharing a files structure, this test
+ 	 * will limit the total number of files that can be opened.
+ 	 */
++	gr_learn_resource(current, RLIMIT_NOFILE, nr, 0);
+ 	if (nr >= rlimit(RLIMIT_NOFILE))
+ 		return -EMFILE;
+ 
+diff --git a/fs/filesystems.c b/fs/filesystems.c
+index 96f2428..2e83399 100644
+--- a/fs/filesystems.c
++++ b/fs/filesystems.c
+@@ -273,7 +273,11 @@ struct file_system_type *get_fs_type(const char *name)
+ 	int len = dot ? dot - name : strlen(name);
+ 
+ 	fs = __get_fs_type(name, len);
+-	if (!fs && (request_module("%.*s", len, name) == 0))
++#ifdef CONFIG_GRKERNSEC_MODHARDEN
++	if (!fs && (___request_module(true, "grsec_modharden_fs", "fs-%.*s", len, name) == 0))
++#else
++	if (!fs && (request_module("fs-%.*s", len, name) == 0))
++#endif
+ 		fs = __get_fs_type(name, len);
+ 
+ 	if (dot && fs && !(fs->fs_flags & FS_HAS_SUBTYPE)) {
+diff --git a/fs/fs_struct.c b/fs/fs_struct.c
+index e159e68..9118749 100644
+--- a/fs/fs_struct.c
++++ b/fs/fs_struct.c
+@@ -4,6 +4,7 @@
+ #include <linux/path.h>
+ #include <linux/slab.h>
+ #include <linux/fs_struct.h>
++#include <linux/grsecurity.h>
+ #include "internal.h"
+ 
+ static inline void path_get_longterm(struct path *path)
+@@ -27,14 +28,18 @@ void set_fs_root(struct fs_struct *fs, struct path *path)
+ 	struct path old_root;
+ 
+ 	path_get_longterm(path);
++	gr_inc_chroot_refcnts(path->dentry, path->mnt);
+ 	spin_lock(&fs->lock);
+ 	write_seqcount_begin(&fs->seq);
+ 	old_root = fs->root;
+ 	fs->root = *path;
++	gr_set_chroot_entries(current, path);
+ 	write_seqcount_end(&fs->seq);
+ 	spin_unlock(&fs->lock);
+-	if (old_root.dentry)
++	if (old_root.dentry) {
++		gr_dec_chroot_refcnts(old_root.dentry, old_root.mnt);
+ 		path_put_longterm(&old_root);
++	}
+ }
+ 
+ /*
+@@ -79,6 +84,10 @@ void chroot_fs_refs(struct path *old_root, struct path *new_root)
+ 			int hits = 0;
+ 			spin_lock(&fs->lock);
+ 			write_seqcount_begin(&fs->seq);
++			/* this root replacement is only done by pivot_root,
++			   leave grsec's chroot tagging alone for this task
++			   so that a pivoted root isn't treated as a chroot
++			*/
+ 			hits += replace_path(&fs->root, old_root, new_root);
+ 			hits += replace_path(&fs->pwd, old_root, new_root);
+ 			write_seqcount_end(&fs->seq);
+@@ -97,6 +106,7 @@ void chroot_fs_refs(struct path *old_root, struct path *new_root)
+ 
+ void free_fs_struct(struct fs_struct *fs)
+ {
++	gr_dec_chroot_refcnts(fs->root.dentry, fs->root.mnt);
+ 	path_put_longterm(&fs->root);
+ 	path_put_longterm(&fs->pwd);
+ 	kmem_cache_free(fs_cachep, fs);
+@@ -111,7 +121,9 @@ void exit_fs(struct task_struct *tsk)
+ 		task_lock(tsk);
+ 		spin_lock(&fs->lock);
+ 		tsk->fs = NULL;
+-		kill = !--fs->users;
++
++		gr_clear_chroot_entries(tsk);
++		kill = !atomic_dec_return(&fs->users);
+ 		spin_unlock(&fs->lock);
+ 		task_unlock(tsk);
+ 		if (kill)
+@@ -124,7 +136,7 @@ struct fs_struct *copy_fs_struct(struct fs_struct *old)
+ 	struct fs_struct *fs = kmem_cache_alloc(fs_cachep, GFP_KERNEL);
+ 	/* We don't need to lock fs - think why ;-) */
+ 	if (fs) {
+-		fs->users = 1;
++		atomic_set(&fs->users, 1);
+ 		fs->in_exec = 0;
+ 		spin_lock_init(&fs->lock);
+ 		seqcount_init(&fs->seq);
+@@ -133,6 +145,9 @@ struct fs_struct *copy_fs_struct(struct fs_struct *old)
+ 		spin_lock(&old->lock);
+ 		fs->root = old->root;
+ 		path_get_longterm(&fs->root);
++		/* instead of calling gr_set_chroot_entries here,
++		   we call it from every caller of this function
++		*/
+ 		fs->pwd = old->pwd;
+ 		path_get_longterm(&fs->pwd);
+ 		spin_unlock(&old->lock);
+@@ -151,8 +166,9 @@ int unshare_fs_struct(void)
+ 
+ 	task_lock(current);
+ 	spin_lock(&fs->lock);
+-	kill = !--fs->users;
++	kill = !atomic_dec_return(&fs->users);
+ 	current->fs = new_fs;
++	gr_set_chroot_entries(current, &new_fs->root);
+ 	spin_unlock(&fs->lock);
+ 	task_unlock(current);
+ 
+@@ -165,13 +181,13 @@ EXPORT_SYMBOL_GPL(unshare_fs_struct);
+ 
+ int current_umask(void)
+ {
+-	return current->fs->umask;
++	return current->fs->umask | gr_acl_umask();
+ }
+ EXPORT_SYMBOL(current_umask);
+ 
+ /* to be mentioned only in INIT_TASK */
+ struct fs_struct init_fs = {
+-	.users		= 1,
++	.users		= ATOMIC_INIT(1),
+ 	.lock		= __SPIN_LOCK_UNLOCKED(init_fs.lock),
+ 	.seq		= SEQCNT_ZERO,
+ 	.umask		= 0022,
 diff --git a/fs/hostfs/hostfs_kern.c b/fs/hostfs/hostfs_kern.c
 index 07c516b..f7ffd04 100644
 --- a/fs/hostfs/hostfs_kern.c
